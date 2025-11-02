@@ -14,10 +14,13 @@ import (
 
 // Candidate represents an IP address selected for probing.
 type Candidate struct {
-	IP      net.IP
-	Network *net.IPNet
-	Family  string
-	Source  string
+	IP             net.IP
+	Network        *net.IPNet
+	Family         string
+	Source         string
+	Domain         string
+	ExpectedOrigin string
+	TrustedCNs     []string
 }
 
 // Sampler produces candidate IPs from Cloudflare network ranges.
@@ -53,6 +56,9 @@ func (s *Sampler) Sample(rs fetcher.RangeSet, total int) ([]Candidate, error) {
 	if total <= 0 {
 		return nil, errors.New("total must be > 0")
 	}
+	if len(rs.Sources) > 0 {
+		return s.sampleWithSources(rs, total)
+	}
 	networks := append([]*net.IPNet{}, rs.IPv4...)
 	networks = append(networks, rs.IPv6...)
 	if len(networks) == 0 {
@@ -81,6 +87,65 @@ func (s *Sampler) Sample(rs fetcher.RangeSet, total int) ([]Candidate, error) {
 			candidate := Candidate{IP: ip, Network: network, Family: familyOf(network), Source: "stratified"}
 			results = append(results, candidate)
 		}
+	}
+	return results, nil
+}
+
+func (s *Sampler) sampleWithSources(rs fetcher.RangeSet, total int) ([]Candidate, error) {
+	type sourceNetwork struct {
+		network *net.IPNet
+		source  fetcher.SourceRangeSet
+	}
+	var combined []sourceNetwork
+	for _, src := range rs.Sources {
+		for _, n := range src.IPv4 {
+			combined = append(combined, sourceNetwork{network: n, source: src})
+		}
+		for _, n := range src.IPv6 {
+			combined = append(combined, sourceNetwork{network: n, source: src})
+		}
+	}
+	if len(combined) == 0 {
+		return nil, errors.New("no networks available")
+	}
+	weights := make([]float64, len(combined))
+	var weightSum float64
+	for i, entry := range combined {
+		weights[i] = weightForNetwork(entry.network)
+		weightSum += weights[i]
+	}
+	if weightSum == 0 {
+		weightSum = 1
+	}
+	results := make([]Candidate, 0, total)
+	for i, entry := range combined {
+		if len(results) >= total {
+			break
+		}
+		portion := int(math.Round(float64(total) * weights[i] / weightSum))
+		if portion == 0 {
+			portion = 1
+		}
+		for portion > 0 && len(results) < total {
+			ip, ok := s.pickUniqueIP(entry.network)
+			if !ok {
+				break
+			}
+			candidate := Candidate{
+				IP:             ip,
+				Network:        entry.network,
+				Family:         familyOf(entry.network),
+				Source:         entry.source.Name,
+				Domain:         entry.source.Domain,
+				ExpectedOrigin: entry.source.ExpectedOrigin,
+				TrustedCNs:     append([]string(nil), entry.source.TrustedCNs...),
+			}
+			results = append(results, candidate)
+			portion--
+		}
+	}
+	if len(results) == 0 {
+		return nil, errors.New("no networks available")
 	}
 	return results, nil
 }

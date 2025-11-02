@@ -14,7 +14,12 @@ func TestScorerScore(t *testing.T) {
 	if result.Score <= 0 {
 		t.Fatalf("expected positive score")
 	}
-	if len(result.Components) != 3 {
-		t.Fatalf("expected 3 components")
+	if len(result.Components) != 4 {
+		t.Fatalf("expected 4 components got %d", len(result.Components))
+	}
+	for _, key := range []string{"latency", "stability", "integrity", "trust"} {
+		if _, ok := result.Components[key]; !ok {
+			t.Fatalf("missing component %s", key)
+		}
 	}
 }

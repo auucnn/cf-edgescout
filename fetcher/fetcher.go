@@ -17,8 +17,22 @@ const (
 
 // RangeSet groups the IPv4 and IPv6 networks that Cloudflare publishes for its edge.
 type RangeSet struct {
-	IPv4 []*net.IPNet
-	IPv6 []*net.IPNet
+	IPv4    []*net.IPNet
+	IPv6    []*net.IPNet
+	Sources []SourceRangeSet
+}
+
+// SourceRangeSet groups networks that originate from the same upstream source.
+type SourceRangeSet struct {
+	Name           string
+	Priority       int
+	Concurrency    int
+	RateLimit      time.Duration
+	Domain         string
+	ExpectedOrigin string
+	TrustedCNs     []string
+	IPv4           []*net.IPNet
+	IPv6           []*net.IPNet
 }
 
 // Fetcher downloads Cloudflare network ranges and parses them into structured data.
@@ -51,7 +65,16 @@ func (f *Fetcher) Fetch(ctx context.Context) (RangeSet, error) {
 	if err != nil {
 		return RangeSet{}, fmt.Errorf("fetch ipv6 ranges: %w", err)
 	}
-	return RangeSet{IPv4: ipv4, IPv6: ipv6}, nil
+	official := SourceRangeSet{
+		Name:        "official",
+		Priority:    100,
+		Concurrency: 1,
+		RateLimit:   0,
+		Domain:      "",
+		IPv4:        ipv4,
+		IPv6:        ipv6,
+	}
+	return RangeSet{IPv4: ipv4, IPv6: ipv6, Sources: []SourceRangeSet{official}}, nil
 }
 
 func (f *Fetcher) fetchRange(ctx context.Context, url string) ([]*net.IPNet, error) {
