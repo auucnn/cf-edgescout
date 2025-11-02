@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/example/cf-edgescout/fetcher"
@@ -19,12 +20,13 @@ type ProbeRunner interface {
 }
 
 type Scheduler struct {
-	Sampler   *sampler.Sampler
-	Prober    ProbeRunner
-	Scorer    *scorer.Scorer
-	Store     store.Store
-	RateLimit time.Duration
-	Retries   int
+	Sampler     *sampler.Sampler
+	Prober      ProbeRunner
+	Scorer      *scorer.Scorer
+	Store       store.Store
+	RateLimit   time.Duration
+	Retries     int
+	Parallelism int
 }
 
 // Result captures the stored record for convenience when returning from scans.
@@ -41,6 +43,13 @@ func (s *Scheduler) Scan(ctx context.Context, sources []fetcher.SourceRange, dom
 	if err != nil {
 		return nil, err
 	}
+	if s.Parallelism <= 1 {
+		return s.scanSequential(ctx, candidates, domain)
+	}
+	return s.scanParallel(ctx, candidates, domain)
+}
+
+func (s *Scheduler) scanSequential(ctx context.Context, candidates []sampler.Candidate, domain string) ([]Result, error) {
 	results := make([]Result, 0, len(candidates))
 	var lastProbe time.Time
 	for _, candidate := range candidates {
@@ -75,6 +84,77 @@ func (s *Scheduler) Scan(ctx context.Context, sources []fetcher.SourceRange, dom
 			return nil, err
 		}
 		results = append(results, Result{Record: record})
+	}
+	return results, nil
+}
+
+func (s *Scheduler) scanParallel(ctx context.Context, candidates []sampler.Candidate, domain string) ([]Result, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	parallel := s.Parallelism
+	if parallel <= 1 {
+		parallel = 1
+	}
+	sem := make(chan struct{}, parallel)
+	type storedResult struct {
+		res Result
+		err error
+	}
+	resultCh := make(chan storedResult, len(candidates))
+	var wg sync.WaitGroup
+	var startCh <-chan time.Time
+	var ticker *time.Ticker
+	if s.RateLimit > 0 {
+		ticker = time.NewTicker(s.RateLimit)
+		startCh = ticker.C
+	}
+	for _, candidate := range candidates {
+		select {
+		case <-ctx.Done():
+			break
+		default:
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(candidate sampler.Candidate) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if startCh != nil {
+				select {
+				case <-ctx.Done():
+					resultCh <- storedResult{err: ctx.Err()}
+					return
+				case <-startCh:
+				}
+			}
+			measurement, err := s.tryProbe(ctx, candidate.IP, domain)
+			if err != nil {
+				resultCh <- storedResult{err: err}
+				return
+			}
+			score := s.Scorer.Score(*measurement)
+			record := store.Record{Timestamp: measurement.Timestamp, Score: score.Score, Components: score.Components, Measurement: score.Measurement}
+			if err := s.Store.Save(ctx, record); err != nil {
+				resultCh <- storedResult{err: err}
+				return
+			}
+			resultCh <- storedResult{res: Result{Record: record}}
+		}(candidate)
+	}
+	go func() {
+		wg.Wait()
+		if ticker != nil {
+			ticker.Stop()
+		}
+		close(resultCh)
+	}()
+	results := make([]Result, 0, len(candidates))
+	for res := range resultCh {
+		if res.err != nil {
+			cancel()
+			return nil, res.err
+		}
+		results = append(results, res.res)
 	}
 	return results, nil
 }
