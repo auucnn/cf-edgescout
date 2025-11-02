@@ -1,87 +1,152 @@
 package fetcher
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
-	"time"
+	"sync"
 )
 
-const (
-	ipv4URL = "https://www.cloudflare.com/ips-v4"
-	ipv6URL = "https://www.cloudflare.com/ips-v6"
-)
-
-// RangeSet groups the IPv4 and IPv6 networks that Cloudflare publishes for its edge.
+// RangeSet groups IPv4 and IPv6 networks for downstream consumers.
 type RangeSet struct {
 	IPv4 []*net.IPNet
 	IPv6 []*net.IPNet
 }
 
-// Fetcher downloads Cloudflare network ranges and parses them into structured data.
+// Fetcher orchestrates fetching and aggregating networks from multiple providers.
 type Fetcher struct {
-	Client  *http.Client
-	IPv4URL string
-	IPv6URL string
+	factory  *ProviderFactory
+	configs  []SourceConfig
+	cacheDir string
+	mu       sync.RWMutex
 }
 
-// New returns a Fetcher using the provided HTTP client or http.DefaultClient if nil.
+// New creates a fetcher using the provided HTTP client and default sources.
 func New(client *http.Client) *Fetcher {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	client.Timeout = 30 * time.Second
-	return &Fetcher{
-		Client:  client,
-		IPv4URL: ipv4URL,
-		IPv6URL: ipv6URL,
-	}
+	factory := NewProviderFactory(client)
+	cfgs := DefaultSources()
+	return &Fetcher{factory: factory, configs: cfgs}
 }
 
-// Fetch retrieves the IPv4 and IPv6 ranges from Cloudflare and parses them into a RangeSet.
-func (f *Fetcher) Fetch(ctx context.Context) (RangeSet, error) {
-	ipv4, err := f.fetchRange(ctx, f.IPv4URL)
-	if err != nil {
-		return RangeSet{}, fmt.Errorf("fetch ipv4 ranges: %w", err)
-	}
-	ipv6, err := f.fetchRange(ctx, f.IPv6URL)
-	if err != nil {
-		return RangeSet{}, fmt.Errorf("fetch ipv6 ranges: %w", err)
-	}
-	return RangeSet{IPv4: ipv4, IPv6: ipv6}, nil
+// SetCacheDir enables persistence of aggregated results to disk.
+func (f *Fetcher) SetCacheDir(dir string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cacheDir = dir
 }
 
-func (f *Fetcher) fetchRange(ctx context.Context, url string) ([]*net.IPNet, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// CacheDir returns the configured cache directory.
+func (f *Fetcher) CacheDir() string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.cacheDir
+}
+
+// UseSources replaces the current source list.
+func (f *Fetcher) UseSources(configs []SourceConfig) {
+	copies := make([]SourceConfig, 0, len(configs))
+	for _, cfg := range configs {
+		copies = append(copies, cfg.Clone())
+	}
+	f.mu.Lock()
+	f.configs = copies
+	f.mu.Unlock()
+}
+
+// UseSourceNames resolves names into configurations and replaces the source list.
+func (f *Fetcher) UseSourceNames(names []string) error {
+	configs, err := NamedSources(names)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	resp, err := f.Client.Do(req)
-	if err != nil {
-		return nil, err
+	f.UseSources(configs)
+	return nil
+}
+
+// Sources returns the configured sources (for testing).
+func (f *Fetcher) Sources() []SourceConfig {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	copies := make([]SourceConfig, 0, len(f.configs))
+	for _, cfg := range f.configs {
+		copies = append(copies, cfg.Clone())
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	return copies
+}
+
+// FetchAggregated retrieves ranges from all configured sources in parallel.
+func (f *Fetcher) FetchAggregated(ctx context.Context) (AggregatedSet, error) {
+	f.mu.RLock()
+	configs := make([]SourceConfig, len(f.configs))
+	copy(configs, f.configs)
+	cacheDir := f.cacheDir
+	f.mu.RUnlock()
+	if len(configs) == 0 {
+		return AggregatedSet{}, errors.New("no sources configured")
 	}
-	var networks []*net.IPNet
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		_, network, err := net.ParseCIDR(line)
+	providers := make([]*Provider, 0, len(configs))
+	for _, cfg := range configs {
+		provider, err := f.factory.Build(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("parse cidr %q: %w", line, err)
+			return AggregatedSet{}, err
 		}
-		networks = append(networks, network)
+		providers = append(providers, provider)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+	type result struct {
+		records []RangeRecord
+		err     error
 	}
-	return networks, nil
+	results := make(chan result, len(providers))
+	var wg sync.WaitGroup
+	for _, provider := range providers {
+		wg.Add(1)
+		go func(p *Provider) {
+			defer wg.Done()
+			records, err := p.Fetch(ctx)
+			results <- result{records: records, err: err}
+		}(provider)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	aggregator := NewAggregator()
+	var errs []error
+	for res := range results {
+		if len(res.records) > 0 {
+			aggregator.Add(res.records)
+		}
+		if res.err != nil {
+			errs = append(errs, res.err)
+		}
+	}
+	set := aggregator.Result()
+	if len(set.Entries) > 0 {
+		if err := set.Persist(cacheDir); err != nil {
+			errs = append(errs, fmt.Errorf("persist cache: %w", err))
+		}
+		return set, errors.Join(errs...)
+	}
+	if cacheDir != "" {
+		cached, err := LoadAggregatedFromCache(cacheDir)
+		if err == nil {
+			return cached, errors.Join(errs...)
+		}
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		errs = append(errs, errors.New("no results fetched"))
+	}
+	return AggregatedSet{}, errors.Join(errs...)
+}
+
+// Fetch retrieves the aggregated ranges and returns them as a RangeSet for legacy consumers.
+func (f *Fetcher) Fetch(ctx context.Context) (RangeSet, error) {
+	aggregated, err := f.FetchAggregated(ctx)
+	if err != nil && len(aggregated.Entries) == 0 {
+		return RangeSet{}, err
+	}
+	return aggregated.RangeSet(), err
 }

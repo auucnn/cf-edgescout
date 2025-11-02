@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/example/cf-edgescout/exporter"
@@ -55,6 +56,9 @@ func scanCmd(args []string) {
 	count := fs.Int("count", 32, "Number of candidates to probe")
 	retries := fs.Int("retries", 1, "Probe retries on failure")
 	rate := fs.Duration("rate", 200*time.Millisecond, "Delay between probes")
+	sources := fs.String("sources", strings.Join(defaultSourceNames(), ","), "Comma-separated data sources to use")
+	cacheDir := fs.String("cache-dir", "", "Directory to persist fetched range cache")
+	parallel := fs.Int("parallel", 4, "Number of candidates to probe concurrently")
 	jsonlPath := fs.String("jsonl", "", "Persist results to a JSONL file")
 	csvPath := fs.String("csv", "", "Export results to a CSV file")
 	fs.Parse(args)
@@ -66,7 +70,10 @@ func scanCmd(args []string) {
 
 	ctx := context.Background()
 	f := fetcher.New(nil)
-	ranges, err := f.Fetch(ctx)
+	if err := configureFetcher(f, *sources, *cacheDir); err != nil {
+		log.Fatalf("configure fetcher: %v", err)
+	}
+	ranges, err := fetchRanges(ctx, f)
 	if err != nil {
 		log.Fatalf("fetch ranges: %v", err)
 	}
@@ -79,12 +86,13 @@ func scanCmd(args []string) {
 	}
 
 	sched := &scheduler.Scheduler{
-		Sampler:   sampler.New(nil),
-		Prober:    prober.New(*domain),
-		Scorer:    scorer.New(),
-		Store:     st,
-		RateLimit: *rate,
-		Retries:   *retries,
+		Sampler:     sampler.New(nil),
+		Prober:      prober.New(*domain),
+		Scorer:      scorer.New(),
+		Store:       st,
+		RateLimit:   *rate,
+		Retries:     *retries,
+		Parallelism: *parallel,
 	}
 	results, err := sched.Scan(ctx, ranges, *domain, *count)
 	if err != nil {
@@ -116,6 +124,9 @@ func daemonCmd(args []string) {
 	retries := fs.Int("retries", 1, "Probe retries on failure")
 	rate := fs.Duration("rate", 200*time.Millisecond, "Delay between probes")
 	interval := fs.Duration("interval", 5*time.Minute, "Interval between scans")
+	sources := fs.String("sources", strings.Join(defaultSourceNames(), ","), "Comma-separated data sources to use")
+	cacheDir := fs.String("cache-dir", "edges-cache", "Directory to persist fetched range cache")
+	parallel := fs.Int("parallel", 4, "Number of candidates to probe concurrently")
 	jsonlPath := fs.String("jsonl", "edges.jsonl", "Path to JSONL store")
 	fs.Parse(args)
 
@@ -127,16 +138,23 @@ func daemonCmd(args []string) {
 	ctx := context.Background()
 	st := store.NewJSONL(*jsonlPath)
 	sched := &scheduler.Scheduler{
-		Sampler:   sampler.New(nil),
-		Prober:    prober.New(*domain),
-		Scorer:    scorer.New(),
-		Store:     st,
-		RateLimit: *rate,
-		Retries:   *retries,
+		Sampler:     sampler.New(nil),
+		Prober:      prober.New(*domain),
+		Scorer:      scorer.New(),
+		Store:       st,
+		RateLimit:   *rate,
+		Retries:     *retries,
+		Parallelism: *parallel,
 	}
 	rangeFetcher := fetcher.New(nil)
+	if err := configureFetcher(rangeFetcher, *sources, *cacheDir); err != nil {
+		log.Fatalf("configure fetcher: %v", err)
+	}
 	fmt.Printf("starting daemon with interval %s\n", interval.String())
-	if err := sched.RunDaemon(ctx, rangeFetcher.Fetch, *domain, *count, *interval); err != nil {
+	fetchFunc := func(ctx context.Context) (fetcher.RangeSet, error) {
+		return fetchRanges(ctx, rangeFetcher)
+	}
+	if err := sched.RunDaemon(ctx, fetchFunc, *domain, *count, *interval); err != nil {
 		log.Fatalf("daemon stopped: %v", err)
 	}
 }
@@ -153,4 +171,48 @@ func serveCmd(args []string) {
 	if err := http.ListenAndServe(*addr, server.Handler()); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+func configureFetcher(f *fetcher.Fetcher, sourcesCSV, cacheDir string) error {
+	if cacheDir != "" {
+		f.SetCacheDir(cacheDir)
+	}
+	names := parseSourceList(sourcesCSV)
+	if len(names) == 0 {
+		names = defaultSourceNames()
+	}
+	return f.UseSourceNames(names)
+}
+
+func parseSourceList(value string) []string {
+	segments := strings.Split(value, ",")
+	out := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		trimmed := strings.TrimSpace(segment)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func defaultSourceNames() []string {
+	defaults := fetcher.DefaultSources()
+	names := make([]string, 0, len(defaults))
+	for _, cfg := range defaults {
+		names = append(names, cfg.Name)
+	}
+	return names
+}
+
+func fetchRanges(ctx context.Context, f *fetcher.Fetcher) (fetcher.RangeSet, error) {
+	aggregated, err := f.FetchAggregated(ctx)
+	if err != nil {
+		if len(aggregated.Entries) == 0 {
+			return fetcher.RangeSet{}, err
+		}
+		log.Printf("warning: partial range fetch completed with errors: %v", err)
+	}
+	return aggregated.RangeSet(), nil
 }
