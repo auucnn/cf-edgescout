@@ -155,3 +155,372 @@
     ├── benchmark.yaml
     └── quickstart.yaml
 ```
+cf-edgescout 是一个用于评估 Cloudflare 边缘网络触达质量的主动探测工具。它可以从多个 Cloudflare 边缘数据中心发起 HTTP/HTTPS 探测，对比各个出口的可达性、延迟以及路由稳定性，并将结果保存为结构化报告，帮助 SRE、性能工程师以及网络团队快速定位问题。项目提供一次性扫描、持续守护进程以及交互式服务三种模式，并支持将指标输出至 Prometheus 或生成 HTML 报表。
+
+## Prerequisites
+在开始之前，请确保具备以下条件：
+
+- Python 3.11 及以上版本，或容器化运行环境（Docker 24+）。
+- 已安装 Poetry 或 pip 以管理依赖：
+  ```bash
+  pip install -r requirements.txt
+  ```
+- 可选：用于 Prometheus 导出或 HTML 报告的额外依赖（例如 `prometheus-client`、`jinja2`）。
+- 一个可控的 Cloudflare 管理域名，以及 API Token（具有 Zone.Zone、Zone.Cache Purge、Account.Analytics 查看权限）。
+- (可选) Redis 或其他缓存后端，用于高频守护任务的速率限制。
+
+## Configuration Schema
+cf-edgescout 通过 YAML 配置文件与环境变量联合定义运行时行为。常见字段如下：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `mode` | `scan \| daemon \| serve` | 运行模式。 |
+| `targets` | 列表 | 每个对象包含 `host`、`protocols`、`ports`、`paths` 与可选的 `description`。 |
+| `probe.timeout_ms` | 数值 | 单次请求超时时间（毫秒）。 |
+| `probe.retries` | 数值 | 每个数据中心的重试次数。 |
+| `probe.max_parallel` | 数值 | 并行探测的最大数量。 |
+| `region_filter.include`/`exclude` | 列表 | 控制使用哪些 Cloudflare 数据中心（colo 代码）。 |
+| `output.directory` | 字符串 | 结果输出目录。 |
+| `output.formats` | 列表 | 启用的输出格式：`jsonl`、`csv`、`top_k`。 |
+| `cloudflare.account_id` | 字符串 | Cloudflare Account ID。 |
+| `cloudflare.api_token_env` | 字符串 | 保存 API Token 的环境变量名称。 |
+| `prometheus.enabled` | 布尔值 | 是否开启 Prometheus 指标导出（守护/服务模式）。 |
+| `notifications` | 对象 | 守护模式下的告警阈值与通知目标。 |
+
+### 环境变量
+- `CF_API_TOKEN`：Cloudflare API Token。
+- `CF_ACCOUNT_ID`：Cloudflare Account ID。
+- `EDGE_SCOUT_TOKENS`：服务模式访问令牌列表，逗号分隔。
+- `REDIS_URL`：可选的 Redis 连接串，用于缓存或速率限制。
+- `SLACK_WEBHOOK_URL`：守护模式下的 Slack 通知入口。
+
+## Scan Modes
+cf-edgescout 支持三种运行模式：
+
+### `scan`
+一次性批量扫描指定目标，并输出指标文件。适用于验证变更或周期性基线测试。
+
+### `daemon`
+以守护进程方式运行，按照预设频率循环执行任务，并支持告警通知、指标聚合与历史记录保留。
+
+### `serve`
+提供 HTTP API、实时仪表盘与可选的 Prometheus 指标导出。可作为团队内部的网络可观测性服务。
+
+## Output Formats
+运行结束后，默认会在 `output.directory` 下生成以下文件：
+
+- `results.jsonl`：逐探测结果，包含时间戳、colo、延迟、HTTP 状态码等字段。
+- `results.csv`：适合导入数据仓库或表格工具的聚合视图。
+- `top_k.txt`：按延迟或成功率排序的前 K 个数据中心列表，便于快速定位最佳出口。
+
+## Cloudflare 管理域名准备
+为了获得准确的测量数据，请在 Cloudflare 管理的测试域名上完成以下准备：
+
+1. 创建专用子域（如 `probe.example.com`），并将其指向可用的源站或 Cloudflare Workers/Pages 服务。
+2. 部署可返回诊断信息的端点，例如开启默认的 `/cdn-cgi/trace`，或上传一个健康检查对象（返回 200 与简单正文）。
+3. 在 Cloudflare 防火墙与速率限制中为探测源 IP 设置白名单，确保不会被意外阻断。
+4. 遵守探测频率限制：建议单个目标每分钟不超过 60 次请求，如需更高频率，请与 Cloudflare 支持沟通以避免被视为滥用。
+5. 记录 Cloudflare colo 代码与期望覆盖范围，以便在 `region_filter` 中配置。
+
+## Benchmarking & Reporting
+
+1. 使用 `scan` 模式执行多轮基准测试：
+   ```bash
+   edgescout scan --config configs/scan.yaml --repeat 5 --cooldown 10s
+   ```
+2. 输出的 `results.jsonl` 可配合以下指标解释：
+   - **Latency**：`latency_ms` 字段，关注 p50/p95；可利用 `jq` 或 Pandas 聚合。
+   - **Success Rate**：按 `status_code` 分组，统计 2xx/3xx 占比。
+   - **Colo Codes**：`colo` 字段提供 Cloudflare 数据中心三字码，用于地理分析。
+3. 若启用了 Prometheus：
+   - 在配置文件中设置 `prometheus.enabled: true` 与监听端口。
+   - 运行 `serve` 或 `daemon` 模式后，抓取 `/metrics` 暴露的指标并接入现有监控系统。
+4. HTML 报告：
+   - 在配置中指定模板目录（例如 `report.template_dir`）。
+   - 运行 `edgescout scan --render-html reports/latest.html` 生成可视化报告。
+5. 为长时间基准测试记录元数据（Git commit、配置版本），确保指标可追溯。
+
+## Sample Configurations & Commands
+
+仓库的 [`configs/`](configs) 目录包含三个示例：
+
+- `configs/scan.yaml`：一次性扫描多个数据中心。
+  ```bash
+  CF_API_TOKEN=... CF_ACCOUNT_ID=... edgescout scan --config configs/scan.yaml
+  ```
+- `configs/daemon.yaml`：持续守护并推送通知。
+  ```bash
+  CF_API_TOKEN=... CF_ACCOUNT_ID=... SLACK_WEBHOOK_URL=... edgescout daemon --config configs/daemon.yaml
+  ```
+- `configs/serve.yaml`：启动 API/仪表盘服务并导出 Prometheus 指标。
+  ```bash
+  CF_API_TOKEN=... CF_ACCOUNT_ID=... EDGE_SCOUT_TOKENS="token1,token2" edgescout serve --config configs/serve.yaml
+  ```
+
+如需自定义，可复制这些文件并根据环境调整目标、网络限制与输出格式。
+
+## Benchmark Workflow Example
+
+1. **准备环境**：设置 Cloudflare API Token、Prometheus 抓取目标以及 HTML 模板。
+2. **执行扫描**：使用 `scan` 模式进行多轮探测，记录 `results.jsonl` 与 `top_k.txt`。
+3. **分析结果**：
+   - 使用 `edgescout report stats --input outputs/results.jsonl` 生成概览。
+   - 导入 `results.csv` 到数据仓库，构建历史延迟与成功率趋势图。
+4. **持续监控**：将关键目标迁移至守护模式，启用通知与 Prometheus 指标。
+5. **回归验证**：在网络变更前后复用同一配置文件进行对比，确保性能无回退。
+
+## Additional Resources
+- [Cloudflare Data Center Locations](https://www.cloudflare.com/network/) – 获取最新的 colo 代码。
+- [Prometheus Documentation](https://prometheus.io/docs/introduction/overview/) – 指标抓取与可视化参考。
+- [jq Manual](https://stedolan.github.io/jq/manual/) – JSONL 数据分析。
+
+## Project Goals
+- **Edge reconnaissance automation**：自動探索並驗證 Cloudflare 邊緣節點的可用性、安全性與性能，協助基礎設施團隊及時發現異常。
+- **多模態結果聚合**：整合掃描、被動監控與服務模式的輸出，提供統一的評估管道。
+- **合規與倫理優先**：在任何測試與部署過程中遵循企業與法律合規框架，避免對使用者與第三方造成影響。
+
+## Architecture Overview
+```
++-----------------------+
+|       CLI Entrypoint  |
+|  (scan / daemon / serve)
++-----------+-----------+
+            |
+   +--------+--------+
+   |                 |
+Scan Engine     Daemon Supervisor
+   |                 |
+Result Writers  Metrics Emitters
+   |                 |
+   +--------+--------+
+            |
+    Storage & Reporting
+ (JSONL, CSV, HTML, Prometheus)
+```
+- **CLI Entrypoint**：使用 `cf-edgescout` 指令進入三種模式。
+- **Scan Engine**：並發探測 Cloudflare 節點，產出結構化結果。
+- **Daemon Supervisor**：長時間運行的排程器，調度掃描任務並監控健康狀態。
+- **Serve 模式**：提供 HTTP API 與前端視覺化頁面。
+- **Storage & Reporting**：將結果寫入多種格式，並可輸出監控指標。
+
+## Module Overview
+- `edgescout/cli.py`：解析命令列參數，載入設定並啟動對應模式。
+- `edgescout/config.py`：處理 YAML 與環境變數設定。
+- `edgescout/scanner/`：包含探測器、併發控制、結果序列化。
+- `edgescout/daemon/`：排程器、任務佇列與重試邏輯。
+- `edgescout/server/`：FastAPI/Starlette 應用，提供 `/results`, `/metrics` 等端點。
+- `edgescout/reporting/`：Prometheus exporter、HTML 報表產生器。
+
+## Compliance Constraints
+- 僅可針對已授權之 Cloudflare zone、子域名或 IP 範圍操作。
+- 請遵循組織安全政策、GDPR、CCPA 等資料保護規範。
+- 設定 `targets.allowlist` 明確列出允許掃描的主機，並使用 `--dry-run` 驗證設定。
+- 遵循 Cloudflare 自動化流量與 API 使用條款，避免過度負載。
+
+## Prerequisites
+- Python 3.10+
+- pip / virtualenv
+- 建議：Redis（若使用佇列式 daemon）、Prometheus（若啟用 metrics）。
+- Cloudflare API Token（可選，若需檢索 zone metadata）。
+
+### Installation
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+## Configuration
+支援 YAML 檔與環境變數。
+
+### YAML 範例 (`config.yaml`)
+```yaml
+runtime:
+  concurrency: 32
+  timeout_s: 5
+  retries: 1
+
+outputs:
+  jsonl_path: ./artifacts/results.jsonl
+  csv_path: ./artifacts/results.csv
+  top_k_path: ./artifacts/top_k.txt
+
+reporting:
+  prometheus:
+    enabled: true
+    bind: 0.0.0.0:9300
+  html:
+    enabled: true
+    output_dir: ./artifacts/html
+
+targets:
+  allowlist:
+    - https://example.com
+    - https://sub.example.com/cdn-cgi/trace
+
+cloudflare:
+  zone_id: ZONEID
+  api_token: ${CF_API_TOKEN}
+```
+
+### 環境變數範例
+```bash
+export CF_EDGESCOUT_CONCURRENCY=32
+export CF_EDGESCOUT_TIMEOUT_S=5
+export CF_EDGESCOUT_OUTPUT_JSONL=./artifacts/results.jsonl
+export CF_EDGESCOUT_OUTPUT_CSV=./artifacts/results.csv
+export CF_EDGESCOUT_OUTPUT_TOPK=./artifacts/top_k.txt
+export CF_EDGESCOUT_PROMETHEUS_ENABLED=true
+export CF_EDGESCOUT_PROMETHEUS_BIND=0.0.0.0:9300
+export CF_EDGESCOUT_HTML_ENABLED=true
+export CF_EDGESCOUT_HTML_DIR=./artifacts/html
+export CF_EDGESCOUT_TARGETS_ALLOWLIST=https://example.com,https://sub.example.com/cdn-cgi/trace
+```
+
+### 優先順序
+1. 命令列旗標
+2. 環境變數
+3. YAML 設定檔
+
+## Command-Line Usage
+
+### `scan`
+執行一次性掃描，輸出結果至 JSONL/CSV。
+```bash
+cf-edgescout scan \
+  --config config.yaml \
+  --concurrency 32 \
+  --output-jsonl artifacts/results.jsonl \
+  --output-csv artifacts/results.csv
+```
+常用旗標：
+- `--targets-file`：包含目標列表的檔案。
+- `--dry-run`：驗證設定與權限而不觸發掃描。
+- `--rate-limit`：指定每秒請求數。
+
+### `daemon`
+長時間運行，定期執行掃描。
+```bash
+cf-edgescout daemon \
+  --config config.yaml \
+  --interval 15m \
+  --queue redis://localhost:6379/0
+```
+常用旗標：
+- `--interval`：掃描週期。
+- `--max-backoff`：連續失敗時的最大退避。
+- `--health-endpoint`：暴露健康檢查端點供探針。
+
+### `serve`
+啟動 API 與儀表板。
+```bash
+cf-edgescout serve \
+  --config config.yaml \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --enable-metrics
+```
+常用旗標：
+- `--enable-metrics`：暴露 `/metrics` 端點。
+- `--enable-html`：提供 HTML 報表頁面。
+- `--auth-token`：啟用簡單 API token 保護。
+
+## Interpreting Outputs
+- **`results.jsonl`**：每行一個探測結果，包含 `target`, `status`, `latency_ms`, `colo`, `timestamp` 等欄位。適合批次處理與資料湖整合。
+- **`results.csv`**：摘要欄位的表格版本，可直接匯入試算表或 BI 工具。
+- **`top_k.txt`**：根據延遲或成功率排序的最佳邊緣節點列表。
+- 使用 `edgescout.reporting.html.generate` 可產生靜態 HTML 報表。
+- Prometheus metrics 於 `/metrics`，例如 `edgescout_scan_latency_ms_bucket`、`edgescout_scan_success_total`。
+
+## Prometheus 與 HTML Reporting
+1. 在設定中啟用 `reporting.prometheus.enabled`，並在 `serve` 或 `daemon` 模式啟動 metrics。
+2. 配置 Prometheus `scrape_config`：
+   ```yaml
+   scrape_configs:
+     - job_name: edgescout
+       static_configs:
+         - targets: ['edgescout.internal:9300']
+   ```
+3. 啟用 HTML 報表後，`serve` 模式會提供 `/reports/index.html`，或在掃描完成後於 `output_dir` 生成靜態檔。
+
+## Cloudflare 部署建議
+- 將 `/cdn-cgi/trace` 或自定義健康檢查端點加入 `targets.allowlist`，確保掃描到 Cloudflare 回應資訊。
+- 對使用者的 Cloudflare zone，配置 Workers / Pages 以回傳簡易 JSON `{ "status": "ok" }`，供 daemon 健康探針使用。
+- 使用 Cloudflare Access 或 API Token 控制內部儀表板的存取。
+
+## Rate Limiting
+- 設定 `--rate-limit` 或 `runtime.rate_limit_per_s` 以限制請求速率。
+- 配合 Cloudflare API 的原生 rate limit (例如 1200 req/5min)，在設定中預留安全緩衝。
+- Daemon 模式可開啟平滑器（token bucket），避免尖峰突發。
+
+## Ethical Considerations
+- 僅對明確授權的網域與資源進行掃描。
+- 先通知利害關係人，避免被誤判為惡意流量。
+- 避免蒐集使用者個資，對任何敏感資料採匿名化與最小化原則。
+- 在報告中標記測試時段與測試來源 IP，供稽核追蹤。
+
+## Benchmarks 與 實驗重現
+1. 取得官方 `benchmarks/` 腳本：
+   ```bash
+   git clone https://github.com/cloudflare-labs/cf-edgescout-benchmarks.git benchmarks
+   ```
+2. 準備樣本設定：
+   ```bash
+   cp benchmarks/configs/sample.yaml config-bench.yaml
+   ```
+3. 執行多輪測試：
+   ```bash
+   cf-edgescout scan --config config-bench.yaml --output-jsonl runs/run1.jsonl
+   cf-edgescout scan --config config-bench.yaml --output-jsonl runs/run2.jsonl
+   ```
+4. 聚合結果：
+   ```bash
+   python benchmarks/aggregate.py runs/*.jsonl --out runs/aggregate.csv
+   ```
+5. 產出比較圖表：
+   ```bash
+   python benchmarks/plot_latency.py runs/aggregate.csv --output runs/latency.png
+   ```
+6. 將報告與數據存放於版本控制下，確保可重現性。
+
+## Troubleshooting
+- 使用 `--debug` 查看詳細日誌。
+- 若 Prometheus 指標缺失，確認 `serve` 模式是否啟用 metrics。
+- 檢查 `artifacts/` 權限以確保能寫入輸出檔。
+- 運行 `cf-edgescout doctor`（若有）自動檢測環境設定。
+
+Cloudflare CDN 多源探测与优选工具，后端基于 Go 1.22，前端采用 React 18 + Vite + TypeScript + Tailwind + Recharts。项目支持官方与第三方节点源的聚合探测、综合评分与可视化展示。
+
+## 功能亮点
+
+- ✅ **多数据源**：同时消费 Cloudflare 官方、BestIP、UOUIN 等社区数据源，自动去重与权重分配。
+- ✅ **多维测量**：覆盖 TCP/TLS/HTTP 延迟、吞吐、证书完整性、HTTP 状态码、响应哈希与地理信息。
+- ✅ **可视化控制台**：现代化前端提供来源筛选、提供方对比、趋势折线与榜单表格。
+- ✅ **模块化设计**：fetcher、sampler、prober、scorer、store、API 互相解耦，便于扩展和二次开发。
+
+## 快速开始
+
+1. 准备环境：Go ≥ 1.22、Node.js ≥ 18。
+2. 运行一次性探测：
+
+   ```bash
+   go run ./cmd/edgescout scan --domain example.com --providers official,bestip,uouin --count 64 --jsonl results.jsonl
+   ```
+
+3. 启动 API 服务并连接前端：
+
+   ```bash
+   go run ./cmd/edgescout serve --jsonl results.jsonl --addr :8080
+
+   cd viz/frontend
+   npm install
+   npm run dev
+   ```
+
+## 文档
+
+- [架构与原理总览](docs/overview.md)：核心流程、模块拆解与数据模型。
+- [部署与运维手册](docs/deployment.md)：环境准备、命令行用法、前端构建与常见问题。
+
+如需进一步自定义（新增提供方、调整评分策略、整合外部告警等），可参考上述文档中的扩展建议。
