@@ -1,0 +1,29 @@
+# Sample configuration for running a one-off scan
+mode: scan
+region_filter:
+  include: ["LAX", "SFO", "FRA"]
+  exclude: []
+targets:
+  - host: example.com
+    description: "Public demo origin"
+    protocols:
+      - https
+    ports:
+      - 443
+    paths:
+      - "/cdn-cgi/trace"
+probe:
+  timeout_ms: 1500
+  retries: 2
+  max_parallel: 32
+  follow_redirects: true
+output:
+  directory: ./outputs
+  formats:
+    - jsonl
+    - csv
+    - top_k
+  top_k: 10
+cloudflare:
+  account_id: CF_ACCOUNT_ID
+  api_token_env: CF_API_TOKEN
