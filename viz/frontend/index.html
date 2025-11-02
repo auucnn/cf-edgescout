@@ -151,31 +151,83 @@
 
     <section class="section observability" id="observability">
       <div class="section-header">
-        <h2>实时观测矩阵</h2>
+        <h2 id="observability-title">实时观测矩阵</h2>
         <p>将后端数据洪流转译成可交互的视觉语言，秒级洞察系统健康。</p>
       </div>
+      <div class="control-panel" role="region" aria-labelledby="observability-title">
+        <div class="source-switch" role="tablist" aria-label="数据来源切换">
+          <button type="button" class="source-pill active" data-source="official" role="tab" aria-selected="true">官方精选</button>
+          <button type="button" class="source-pill" data-source="third-party" role="tab" aria-selected="false">第三方社区</button>
+          <button type="button" class="source-pill" data-source="all" role="tab" aria-selected="false">全部数据</button>
+        </div>
+        <div class="filter-row">
+          <label for="region-filter">地理区域</label>
+          <select id="region-filter" name="region" aria-label="按区域筛选" title="选择地理区域">
+            <option value="">全部</option>
+          </select>
+          <label for="score-min">得分</label>
+          <input type="number" id="score-min" inputmode="decimal" step="0.01" placeholder="最小" aria-label="最低得分">
+          <span aria-hidden="true">-</span>
+          <input type="number" id="score-max" inputmode="decimal" step="0.01" placeholder="最高" aria-label="最高得分">
+          <label for="search-input" class="visually-hidden">搜索节点</label>
+          <input type="search" id="search-input" placeholder="搜索 IP、Colo、标签" aria-label="搜索节点" autocomplete="off">
+          <div class="action-buttons" role="group" aria-label="操作">
+            <button type="button" id="refresh-button" class="ghost" aria-controls="observability" aria-describedby="status-message">刷新</button>
+            <button type="button" id="export-button" class="primary">导出 JSON</button>
+          </div>
+        </div>
+        <div class="status-row">
+          <p id="status-message" role="status" aria-live="polite">加载中…</p>
+          <p id="error-message" role="alert" class="hidden"></p>
+        </div>
+      </div>
+      <div class="metrics-bar" role="list" aria-label="核心指标">
+        <div class="metric-card" role="listitem">
+          <h3>平均得分</h3>
+          <p id="metric-avg">--</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h3>最佳节点</h3>
+          <p id="metric-max">--</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h3>最低得分</h3>
+          <p id="metric-min">--</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h3>样本量</h3>
+          <p id="metric-total">--</p>
+        </div>
+      </div>
       <div class="observability-grid">
-        <div class="chart-card">
+        <article class="chart-card" aria-labelledby="trend-heading">
           <header>
-            <h3>全球边缘节点延迟</h3>
-            <span class="badge">实时</span>
+            <h3 id="trend-heading">趋势折线</h3>
+            <span class="badge">最近 24h</span>
           </header>
-          <canvas id="latency-chart" width="640" height="320" aria-label="延迟折线图"></canvas>
-        </div>
-        <div class="chart-card">
+          <canvas id="trend-chart" width="640" height="320" aria-label="健康度趋势折线"></canvas>
+        </article>
+        <article class="chart-card" aria-labelledby="radar-heading">
           <header>
-            <h3>异常波形捕获</h3>
-            <span class="badge warning">监控</span>
+            <h3 id="radar-heading">健康雷达</h3>
+            <span class="badge warning">组件均值</span>
           </header>
-          <div class="waveform" id="waveform" aria-live="polite"></div>
-        </div>
-        <div class="chart-card log-stream">
+          <canvas id="radar-chart" width="400" height="320" aria-label="健康雷达图"></canvas>
+        </article>
+        <article class="chart-card leaderboard" aria-labelledby="leaderboard-heading">
           <header>
-            <h3>调度事件流</h3>
-            <span class="badge neutral">事件</span>
+            <h3 id="leaderboard-heading">优选节点</h3>
+            <span class="badge neutral" id="leaderboard-count">0</span>
           </header>
-          <ul id="log-stream" aria-live="polite"></ul>
-        </div>
+          <ol id="leaderboard" tabindex="0" aria-live="polite" aria-label="优选节点列表"></ol>
+        </article>
+        <article class="chart-card log-stream" aria-labelledby="event-heading">
+          <header>
+            <h3 id="event-heading">最新事件</h3>
+            <span class="badge neutral">实时</span>
+          </header>
+          <ul id="log-stream" aria-live="polite" aria-busy="false"></ul>
+        </article>
       </div>
     </section>
 
@@ -236,6 +288,7 @@
     </div>
   </footer>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
   <script src="script.js" defer></script>
 </body>
 </html>

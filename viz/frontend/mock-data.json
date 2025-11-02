@@ -1,0 +1,68 @@
+{
+  "records": [
+    {
+      "timestamp": "2024-06-01T08:00:00Z",
+      "score": 0.92,
+      "components": {"latency": 0.88, "availability": 0.97, "throughput": 0.91},
+      "measurement": {"IP": "198.41.0.1", "Domain": "www.cloudflare.com", "CFColo": "SJC", "ALPN": "h2", "TLSVersion": "TLS1.3"},
+      "source": "official",
+      "region": "SJC"
+    },
+    {
+      "timestamp": "2024-06-01T08:05:00Z",
+      "score": 0.87,
+      "components": {"latency": 0.81, "availability": 0.93, "throughput": 0.86},
+      "measurement": {"IP": "198.41.0.2", "Domain": "www.cloudflare.com", "CFColo": "LHR", "ALPN": "h2", "TLSVersion": "TLS1.3"},
+      "source": "official",
+      "region": "LHR"
+    },
+    {
+      "timestamp": "2024-06-01T08:10:00Z",
+      "score": 0.79,
+      "components": {"latency": 0.74, "availability": 0.88, "throughput": 0.8},
+      "measurement": {"IP": "203.0.113.12", "Domain": "edge.partner.net", "CFColo": "SJC", "ALPN": "http/1.1", "TLSVersion": "TLS1.2"},
+      "source": "third-party",
+      "region": "SJC"
+    },
+    {
+      "timestamp": "2024-06-01T08:15:00Z",
+      "score": 0.83,
+      "components": {"latency": 0.78, "availability": 0.9, "throughput": 0.84},
+      "measurement": {"IP": "203.0.113.20", "Domain": "edge.partner.net", "CFColo": "FRA", "ALPN": "http/1.1", "TLSVersion": "TLS1.2"},
+      "source": "third-party",
+      "region": "FRA"
+    },
+    {
+      "timestamp": "2024-06-01T08:20:00Z",
+      "score": 0.95,
+      "components": {"latency": 0.92, "availability": 0.99, "throughput": 0.94},
+      "measurement": {"IP": "198.41.0.9", "Domain": "www.cloudflare.com", "CFColo": "HKG", "ALPN": "h2", "TLSVersion": "TLS1.3"},
+      "source": "official",
+      "region": "HKG"
+    },
+    {
+      "timestamp": "2024-06-01T08:25:00Z",
+      "score": 0.68,
+      "components": {"latency": 0.6, "availability": 0.8, "throughput": 0.66},
+      "measurement": {"IP": "198.51.100.44", "Domain": "community-probe.net", "CFColo": "LAX", "ALPN": "http/1.1", "TLSVersion": "TLS1.2"},
+      "source": "third-party",
+      "region": "LAX"
+    },
+    {
+      "timestamp": "2024-06-01T08:30:00Z",
+      "score": 0.89,
+      "components": {"latency": 0.86, "availability": 0.94, "throughput": 0.9},
+      "measurement": {"IP": "198.41.0.15", "Domain": "www.cloudflare.com", "CFColo": "SYD", "ALPN": "h2", "TLSVersion": "TLS1.3"},
+      "source": "official",
+      "region": "SYD"
+    },
+    {
+      "timestamp": "2024-06-01T08:35:00Z",
+      "score": 0.73,
+      "components": {"latency": 0.69, "availability": 0.82, "throughput": 0.71},
+      "measurement": {"IP": "198.51.100.66", "Domain": "community-probe.net", "CFColo": "SJC", "ALPN": "http/1.1", "TLSVersion": "TLS1.2"},
+      "source": "third-party",
+      "region": "SJC"
+    }
+  ]
+}
