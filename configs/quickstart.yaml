@@ -1,0 +1,32 @@
+# Quickstart configuration for cf-edgescout
+# 將 target.host 改為你的 Cloudflare 測試網域
+
+target:
+  host: https://edgescout.example.com
+  health_path: /cdn-cgi/trace
+
+probe:
+  modes:
+    - scan
+  timeout_ms: 3000
+  retry: 1
+
+concurrency:
+  workers: 4
+
+outputs:
+  directory: ./outputs
+  formats:
+    - results.jsonl
+    - results.csv
+  top_k:
+    enabled: true
+    k: 5
+
+report:
+  prometheus:
+    enabled: false
+    listen_addr: 127.0.0.1:9797
+  html:
+    enabled: false
+    path: ./outputs/report.html

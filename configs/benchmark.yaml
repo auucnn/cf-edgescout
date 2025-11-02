@@ -1,0 +1,38 @@
+# Benchmark configuration for continuous measurement
+# 適合搭配 daemon/serve 模式，並輸出 Prometheus 與 HTML 報告
+
+target:
+  host: https://edgescout.example.com
+  health_path: /healthz
+
+probe:
+  modes:
+    - daemon
+    - serve
+  timeout_ms: 2500
+  retry: 2
+  duration: 300
+  interval: 30
+
+concurrency:
+  workers: 8
+
+outputs:
+  directory: ./outputs
+  formats:
+    - results.jsonl
+    - results.csv
+  top_k:
+    enabled: true
+    k: 10
+
+serve:
+  listen_addr: 0.0.0.0:8080
+
+report:
+  prometheus:
+    enabled: true
+    listen_addr: 0.0.0.0:9797
+  html:
+    enabled: true
+    path: ./outputs/benchmark.html
