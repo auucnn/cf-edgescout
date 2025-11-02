@@ -1,294 +1,138 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>EdgeScout Observability Studio</title>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <header class="hero" id="home">
-    <nav class="top-nav">
-      <a class="logo" href="#home">EdgeScout</a>
-      <button class="nav-toggle" aria-label="展开菜单">☰</button>
-      <ul class="nav-links">
-        <li><a href="#architecture">架构</a></li>
-        <li><a href="#experience">体验</a></li>
-        <li><a href="#observability">观测</a></li>
-        <li><a href="#craft">匠心</a></li>
-      </ul>
-    </nav>
-    <div class="hero-content">
-      <h1>全栈观测的世纪协奏</h1>
-      <p>
-        前端设计师与后端工程师穷尽一生淬炼的 EdgeScout 体验，将数据之海、交互之舞、性能之魂交织成一幅多维画卷。
-      </p>
-      <div class="cta-group">
-        <a class="cta primary" href="#architecture">浏览系统解剖</a>
-        <a class="cta" href="#observability">实时洞察</a>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EdgeScout 观测面板</title>
+    <link rel="stylesheet" href="styles.css" />
+    <noscript>
+      <style>
+        main { display: none; }
+        .noscript-warning { display: block; }
+      </style>
+    </noscript>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="header-text">
+        <h1>EdgeScout 观测面板</h1>
+        <p>实时查看 Cloudflare 边缘节点的健康状态、来源分布与趋势指标。</p>
       </div>
-    </div>
-    <div class="hero-visual" aria-hidden="true">
-      <div class="orb orb-front"></div>
-      <div class="orb orb-back"></div>
-      <div class="orb orb-data"></div>
-    </div>
-  </header>
+      <div class="header-actions">
+        <button type="button" id="refresh-button" class="button button-ghost" aria-describedby="status-message">立即刷新</button>
+        <button type="button" id="export-button" class="button">导出当前视图</button>
+      </div>
+    </header>
 
-  <main>
-    <section class="section architecture" id="architecture">
-      <div class="section-header">
-        <h2>系统解剖</h2>
-        <p>交织前后端的 7 层蓝图，精雕细琢的工匠级细节。</p>
-      </div>
-      <div class="grid architecture-grid">
-        <article class="card">
-          <h3>体验基座</h3>
-          <p>原生 HTML 结构将关键数据流拆分为语义片段，以可维护的文档骨架支撑交互变奏。</p>
-          <ul>
-            <li>语义化布局</li>
-            <li>无障碍优先</li>
-            <li>响应式网格</li>
-          </ul>
-        </article>
-        <article class="card">
-          <h3>视觉语汇</h3>
-          <p>纯 CSS 渲染的动势光晕模拟数据涌动，色彩体系映射前后端职责。</p>
-          <ul>
-            <li>动态渐变</li>
-            <li>暗色模式友好</li>
-            <li>设计令牌驱动</li>
-          </ul>
-        </article>
-        <article class="card">
-          <h3>交互编排</h3>
-          <p>原生 JavaScript 管理状态、节流滚动侦测、原子动画，提供框架级体验。</p>
-          <ul>
-            <li>Intersection Observer</li>
-            <li>Canvas 数据驱动</li>
-            <li>Web Animations API</li>
-          </ul>
-        </article>
-        <article class="card">
-          <h3>服务网格</h3>
-          <p>后端微服务分层切片：采集、调度、评分、存储、可视化，通过 gRPC 与事件总线无缝协作。</p>
-          <ul>
-            <li>边缘采集节点</li>
-            <li>调度优先级队列</li>
-            <li>Geo 分片策略</li>
-          </ul>
-        </article>
-        <article class="card">
-          <h3>数据心脏</h3>
-          <p>流式数据库将指标、日志、追踪统一建模，支持毫秒级查询与回放。</p>
-          <ul>
-            <li>列式压缩</li>
-            <li>矢量检索</li>
-            <li>多租户隔离</li>
-          </ul>
-        </article>
-        <article class="card">
-          <h3>智能编排</h3>
-          <p>评分引擎对边缘节点的健康度实时评分，为前端预置状态与回退策略。</p>
-          <ul>
-            <li>状态机驱动 UI</li>
-            <li>预测性渲染</li>
-            <li>自动化补救</li>
-          </ul>
-        </article>
-        <article class="card wide">
-          <h3>端到端体验旅程</h3>
-          <p>
-            用户在浏览器触发一次探测，前端将需求拆分为可视化任务，后端集群在边缘捕捉数据并回传给前端实时渲染，整条链路延迟可控在 180ms 内。
-          </p>
-          <div class="timeline" aria-label="端到端旅程">
-            <div class="timeline-step" data-label="请求拆解">12ms</div>
-            <div class="timeline-step" data-label="边缘采集">48ms</div>
-            <div class="timeline-step" data-label="流式评分">65ms</div>
-            <div class="timeline-step" data-label="可视化">35ms</div>
-          </div>
-        </article>
-      </div>
-    </section>
+    <p class="noscript-warning" role="alert">
+      需要启用 JavaScript 才能使用仪表板。
+    </p>
 
-    <section class="section experience" id="experience">
-      <div class="section-header">
-        <h2>体验编织</h2>
-        <p>设计与工程的双螺旋结构，从像素到字节的精密对齐。</p>
-      </div>
-      <div class="experience-content">
-        <aside class="switcher">
-          <button class="switch active" data-role="frontend">前端视角</button>
-          <button class="switch" data-role="backend">后端视角</button>
-        </aside>
-        <article class="role-panel" id="frontend-panel">
-          <h3>界面设计语言</h3>
-          <p>
-            设计师以模态层次与数据密度为轴构建信息图谱，栅格与排版遵循黄金比例，色彩基于可观测性语义调色板：健康、警告、告警、故障。
-          </p>
-          <ul>
-            <li>动态组件库：原生 Web Component 规范</li>
-            <li>动效曲线：弹性缓动 + 关键帧同步</li>
-            <li>微交互：提示、探索、确认三阶段反馈</li>
-          </ul>
-        </article>
-        <article class="role-panel hidden" id="backend-panel">
-          <h3>工程编配策略</h3>
-          <p>
-            工程师以一致性、低延迟、可扩展为核心，将数据采集、调度、评分、可视化模块解耦，通过事件驱动流水线支撑前端实时渲染。
-          </p>
-          <ul>
-            <li>可观测性协议：OpenTelemetry + 自研补充指标</li>
-            <li>弹性伸缩：K8s HPA + 边缘推理模型</li>
-            <li>持续交付：GitOps 驱动、蓝绿发布</li>
-          </ul>
-        </article>
-        <div class="experience-visual" aria-hidden="true">
-          <canvas id="experience-canvas" width="520" height="320"></canvas>
-        </div>
-      </div>
-    </section>
-
-    <section class="section observability" id="observability">
-      <div class="section-header">
-        <h2 id="observability-title">实时观测矩阵</h2>
-        <p>将后端数据洪流转译成可交互的视觉语言，秒级洞察系统健康。</p>
-      </div>
-      <div class="control-panel" role="region" aria-labelledby="observability-title">
-        <div class="source-switch" role="tablist" aria-label="数据来源切换">
-          <button type="button" class="source-pill active" data-source="official" role="tab" aria-selected="true">官方精选</button>
-          <button type="button" class="source-pill" data-source="third-party" role="tab" aria-selected="false">第三方社区</button>
-          <button type="button" class="source-pill" data-source="all" role="tab" aria-selected="false">全部数据</button>
-        </div>
-        <div class="filter-row">
-          <label for="region-filter">地理区域</label>
-          <select id="region-filter" name="region" aria-label="按区域筛选" title="选择地理区域">
-            <option value="">全部</option>
-          </select>
-          <label for="score-min">得分</label>
-          <input type="number" id="score-min" inputmode="decimal" step="0.01" placeholder="最小" aria-label="最低得分">
-          <span aria-hidden="true">-</span>
-          <input type="number" id="score-max" inputmode="decimal" step="0.01" placeholder="最高" aria-label="最高得分">
-          <label for="search-input" class="visually-hidden">搜索节点</label>
-          <input type="search" id="search-input" placeholder="搜索 IP、Colo、标签" aria-label="搜索节点" autocomplete="off">
-          <div class="action-buttons" role="group" aria-label="操作">
-            <button type="button" id="refresh-button" class="ghost" aria-controls="observability" aria-describedby="status-message">刷新</button>
-            <button type="button" id="export-button" class="primary">导出 JSON</button>
-          </div>
-        </div>
-        <div class="status-row">
-          <p id="status-message" role="status" aria-live="polite">加载中…</p>
+    <main>
+      <section class="panel filters" aria-labelledby="filters-title">
+        <div class="panel-header">
+          <h2 id="filters-title">筛选条件</h2>
+          <p id="status-message" role="status" aria-live="polite">等待加载…</p>
           <p id="error-message" role="alert" class="hidden"></p>
         </div>
-      </div>
-      <div class="metrics-bar" role="list" aria-label="核心指标">
-        <div class="metric-card" role="listitem">
-          <h3>平均得分</h3>
-          <p id="metric-avg">--</p>
+        <form class="filter-grid" aria-label="数据筛选">
+          <fieldset class="source-switch" role="tablist" aria-label="数据来源">
+            <legend class="visually-hidden">数据来源</legend>
+            <button type="button" class="pill active" data-source="official" role="tab" aria-selected="true">官方</button>
+            <button type="button" class="pill" data-source="third-party" role="tab" aria-selected="false">第三方</button>
+            <button type="button" class="pill" data-source="all" role="tab" aria-selected="false">全部</button>
+          </fieldset>
+          <label for="region-filter">区域</label>
+          <select id="region-filter" name="region" aria-label="按区域筛选">
+            <option value="">全部区域</option>
+          </select>
+          <label for="score-min">得分下限</label>
+          <input id="score-min" name="score_min" type="number" step="0.01" inputmode="decimal" placeholder="例如 0.6" aria-describedby="score-range-hint" />
+          <label for="score-max">得分上限</label>
+          <input id="score-max" name="score_max" type="number" step="0.01" inputmode="decimal" placeholder="例如 0.95" aria-describedby="score-range-hint" />
+          <p id="score-range-hint" class="hint">留空表示无限制</p>
+          <label for="search-input" class="visually-hidden">搜索节点</label>
+          <input id="search-input" type="search" placeholder="搜索 IP / 节点标签" aria-label="搜索节点" autocomplete="off" />
+        </form>
+        <div class="pill-notice" id="mock-indicator" hidden role="status" aria-live="assertive">
+          当前使用离线 mock 数据，检查 API 是否可达。
         </div>
-        <div class="metric-card" role="listitem">
-          <h3>最佳节点</h3>
-          <p id="metric-max">--</p>
-        </div>
-        <div class="metric-card" role="listitem">
-          <h3>最低得分</h3>
-          <p id="metric-min">--</p>
-        </div>
-        <div class="metric-card" role="listitem">
-          <h3>样本量</h3>
-          <p id="metric-total">--</p>
-        </div>
-      </div>
-      <div class="observability-grid">
-        <article class="chart-card" aria-labelledby="trend-heading">
-          <header>
-            <h3 id="trend-heading">趋势折线</h3>
-            <span class="badge">最近 24h</span>
-          </header>
-          <canvas id="trend-chart" width="640" height="320" aria-label="健康度趋势折线"></canvas>
-        </article>
-        <article class="chart-card" aria-labelledby="radar-heading">
-          <header>
-            <h3 id="radar-heading">健康雷达</h3>
-            <span class="badge warning">组件均值</span>
-          </header>
-          <canvas id="radar-chart" width="400" height="320" aria-label="健康雷达图"></canvas>
-        </article>
-        <article class="chart-card leaderboard" aria-labelledby="leaderboard-heading">
-          <header>
-            <h3 id="leaderboard-heading">优选节点</h3>
-            <span class="badge neutral" id="leaderboard-count">0</span>
-          </header>
-          <ol id="leaderboard" tabindex="0" aria-live="polite" aria-label="优选节点列表"></ol>
-        </article>
-        <article class="chart-card log-stream" aria-labelledby="event-heading">
-          <header>
-            <h3 id="event-heading">最新事件</h3>
-            <span class="badge neutral">实时</span>
-          </header>
-          <ul id="log-stream" aria-live="polite" aria-busy="false"></ul>
-        </article>
-      </div>
-    </section>
+      </section>
 
-    <section class="section craft" id="craft">
-      <div class="section-header">
-        <h2>工匠档案</h2>
-        <p>团队以终身钻研的执着，将体验与工程打磨到原子级细节。</p>
-      </div>
-      <div class="craft-grid">
-        <article class="persona">
-          <h3>设计总监 · 陆珂</h3>
-          <p>沉浸式数据体验布道者，以天文观测图谱启发边缘观测视觉语言。</p>
-          <div class="pill-group">
-            <span class="pill">信息图形</span>
-            <span class="pill">动效系统</span>
-            <span class="pill">可及性</span>
-          </div>
-        </article>
-        <article class="persona">
-          <h3>交互工匠 · 白穆</h3>
-          <p>专注微交互 18 年，打造毫秒级响应的事件反馈与触觉震动节奏。</p>
-          <div class="pill-group">
-            <span class="pill">原生组件</span>
-            <span class="pill">体验研究</span>
-            <span class="pill">认知负荷</span>
-          </div>
-        </article>
-        <article class="persona">
-          <h3>后端首席 · 纪临</h3>
-          <p>边缘网络拓扑专家，完成 12 次全球网络实测，为调度算法提供真实数据。</p>
-          <div class="pill-group">
-            <span class="pill">分布式系统</span>
-            <span class="pill">低延迟</span>
-            <span class="pill">自愈架构</span>
-          </div>
-        </article>
-        <article class="persona">
-          <h3>数据炼金师 · 安澜</h3>
-          <p>将四十亿条指标归一化，训练自适应基线模型，推送预测给前端。</p>
-          <div class="pill-group">
-            <span class="pill">流式计算</span>
-            <span class="pill">异常检测</span>
-            <span class="pill">A/B 评估</span>
-          </div>
-        </article>
-      </div>
-    </section>
-  </main>
+      <section class="panel metrics" aria-labelledby="metrics-title">
+        <div class="panel-header">
+          <h2 id="metrics-title">核心指标</h2>
+        </div>
+        <div class="metric-grid" role="list">
+          <article class="metric-card" role="listitem">
+            <h3>平均得分</h3>
+            <p id="metric-avg">--</p>
+          </article>
+          <article class="metric-card" role="listitem">
+            <h3>最高得分</h3>
+            <p id="metric-max">--</p>
+          </article>
+          <article class="metric-card" role="listitem">
+            <h3>最低得分</h3>
+            <p id="metric-min">--</p>
+          </article>
+          <article class="metric-card" role="listitem">
+            <h3>样本数量</h3>
+            <p id="metric-total">--</p>
+          </article>
+        </div>
+      </section>
 
-  <footer class="footer">
-    <div class="footer-content">
-      <p>© 2024 EdgeScout Observability Studio — 前后端终身追求的巅峰作品。</p>
-      <div class="footer-links">
-        <a href="#architecture">系统蓝图</a>
-        <a href="#experience">体验设计</a>
-        <a href="#observability">实时洞察</a>
-      </div>
-    </div>
-  </footer>
+      <section class="panel charts" aria-labelledby="charts-title">
+        <div class="panel-header">
+          <h2 id="charts-title">趋势与健康</h2>
+        </div>
+        <div class="chart-grid">
+          <figure>
+            <figcaption>平均得分趋势</figcaption>
+            <canvas id="trend-chart" aria-label="得分趋势折线图" role="img"></canvas>
+          </figure>
+          <figure>
+            <figcaption>组件健康雷达</figcaption>
+            <canvas id="radar-chart" aria-label="组件健康雷达图" role="img"></canvas>
+          </figure>
+        </div>
+      </section>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
-  <script src="script.js" defer></script>
-</body>
+      <section class="panel leaderboard" aria-labelledby="leaderboard-title">
+        <div class="panel-header">
+          <h2 id="leaderboard-title">优选节点</h2>
+          <p id="leaderboard-count">--</p>
+        </div>
+        <ol id="leaderboard" class="leaderboard-list" aria-live="polite"></ol>
+      </section>
+
+      <section class="panel results" aria-labelledby="results-title">
+        <div class="panel-header">
+          <h2 id="results-title">原始记录</h2>
+        </div>
+        <div class="table-wrapper" tabindex="0">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">时间</th>
+                <th scope="col">来源</th>
+                <th scope="col">区域</th>
+                <th scope="col">得分</th>
+                <th scope="col">详情</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <p>API 由 <code>cf-edgescout serve</code> 提供 · 前端支持离线 mock 调试。</p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.5/dist/chart.umd.min.js" integrity="sha384-fq2WRWB9H2r/qdHTMYAaVj3l5nHvBv4+z1gTdIsXf7z6vQqlwvl7xmKj4Yd49nsP" crossorigin="anonymous"></script>
+    <script type="module" src="js/main.js"></script>
+  </body>
 </html>

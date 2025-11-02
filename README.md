@@ -15,7 +15,7 @@ cf-edgescout daemon -domain example.com -jsonl edges.jsonl
 cf-edgescout serve -jsonl edges.jsonl -addr :8080
 ```
 
-将 `viz/frontend` 目录以静态站点方式部署或直接用浏览器打开 `index.html` 即可体验仪表板。若与 `serve` 子命令同域部署，前端会默认访问 `http://<host>:8080` 提供的 API。
+将 `viz/frontend` 目录作为静态站点部署或直接用浏览器打开 `index.html` 即可体验仪表板。前端默认访问当前来源的 `/results` API，可通过在页面加载前设置 `window.EDGESCOUT_API_BASE` 指向后端服务。
 
 ## 数据 API
 
@@ -59,30 +59,36 @@ cf-edgescout serve \
 
 ## 前端仪表板
 
-前端位于 `viz/frontend`，完全基于原生 HTML/CSS/JS，并通过 Chart.js 绘制趋势与雷达图。主要能力包括：
+前端位于 `viz/frontend`，采用模块化原生 JavaScript，核心组成如下：
 
-- 官方 / 第三方数据源切换，支持键盘方向键导航。
-- 区域、得分区间筛选与关键字搜索，实时更新优选列表与事件流。
-- 趋势折线、健康雷达、核心指标卡片及可访问性优化（ARIA 标签、aria-live 状态提示）。
-- 一键导出当前视图数据（JSON），供分享或排错。
-- API 不可用时自动回落至 `mock-data.json`，支持离线调试。
+- `js/api.js`：负责访问 REST API，并在网络异常时透明切换到 `mock-data.json`。
+- `js/state.js`：集中管理筛选条件、加载状态与返回结果。
+- `js/ui.js` / `js/charts.js`：更新指标卡片、列表、图表（使用 Chart.js）。
+
+仪表板主要提供以下能力：
+
+- 官方 / 第三方 / 全部数据源切换，支持区域、得分区间与关键字过滤。
+- 聚合指标、优选节点、折线趋势、健康雷达图实时渲染，并兼顾键盘导航和 ARIA 辅助文本。
+- 一键导出当前视图（包含 summary/timeseries/结果明细）以便排查。
+- 后端不可达时自动回落至离线示例数据，方便前端独立开发。
 
 ### 离线调试
 
-若后端不可用，可直接打开 `viz/frontend/index.html` 并通过浏览器控制台设置：
+若后端暂未部署，可直接打开 `index.html`，前端会自动加载 `mock-data.json`。也可以显式指定接口地址：
 
-```js
-// 可选：显式切换为离线模式
-window.EDGESCOUT_API_BASE = ''; // 保持为空使用 mock-data
+```html
+<script>
+  window.EDGESCOUT_API_BASE = 'https://api.example.com';
+</script>
 ```
 
-前端会自动从 `viz/frontend/mock-data.json` 载入示例数据，展示完整交互流程。
+该脚本需置于 `js/main.js` 之前。保留空字符串或删除脚本即可使用内置 mock。
 
 ## 部署建议
 
 1. 使用 `cf-edgescout daemon` 持续写入 JSONL 文件。
-2. 通过 `cf-edgescout serve` 将 JSONL 文件暴露为 API，可使用 Systemd 或容器编排运行。
-3. 将 `viz/frontend` 上传至任意静态资源服务（如 Cloudflare Pages、Netlify）。
-4. 配置前端的 `window.EDGESCOUT_API_BASE` 指向 API 地址，或保持同域部署。
+2. 通过 `cf-edgescout serve` 将 JSONL 文件暴露为 API，可结合 Systemd、容器或无服务器平台运行。
+3. 将 `viz/frontend` 上传至任意静态资源服务（如 Cloudflare Pages、Netlify、Vercel）。
+4. 依据部署架构配置 `window.EDGESCOUT_API_BASE` 或让前端与 API 同域提供服务。
 
 欢迎根据业务需求扩展探测指标、持久化后端或前端 UI。若发现问题，欢迎提交 Issue 或 PR。
