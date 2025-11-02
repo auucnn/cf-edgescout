@@ -33,6 +33,47 @@ type LocationInfo struct {
 }
 
 type Measurement struct {
+	IP                  net.IP
+	Domain              string
+	RequestHost         string
+	TCPDuration         time.Duration
+	TLSDuration         time.Duration
+	HTTPDuration        time.Duration
+	Success             bool
+	Error               string
+	ALPN                string
+	TLSVersion          string
+	SNI                 string
+	Throughput          float64
+	CFRay               string
+	CFColo              string
+	Geo                 geo.Info
+	DataSource          string
+	CertificateCN       string
+	CertificateDNSNames []string
+	OriginHost          string
+	HTTPFingerprint     HTTPFingerprint
+	Validation          ValidationResult
+	Timestamp           time.Time
+}
+
+// HTTPFingerprint records the high level HTTP characteristics observed.
+type HTTPFingerprint struct {
+	StatusCode    int               `json:"status_code"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	ContentLength int64             `json:"content_length"`
+}
+
+// ValidationResult captures the outcome of additional safety checks.
+type ValidationResult struct {
+	SNI              string   `json:"sni"`
+	CertificateCN    string   `json:"certificate_cn"`
+	CertificateMatch bool     `json:"certificate_match"`
+	ExpectedCNs      []string `json:"expected_cns,omitempty"`
+	OriginHost       string   `json:"origin_host,omitempty"`
+	ExpectedOrigin   string   `json:"expected_origin,omitempty"`
+	OriginMatch      bool     `json:"origin_match"`
+	Failures         []string `json:"failures,omitempty"`
 	IP           net.IP          `json:"ip"`
 	Domain       string          `json:"domain"`
 	TCPDuration  time.Duration   `json:"tcpDuration"`
@@ -119,6 +160,12 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 	if state := tlsConn.ConnectionState(); state.HandshakeComplete {
 		m.ALPN = state.NegotiatedProtocol
 		m.TLSVersion = tlsVersionString(state.Version)
+		m.SNI = state.ServerName
+		if len(state.PeerCertificates) > 0 {
+			cert := state.PeerCertificates[0]
+			m.CertificateCN = cert.Subject.CommonName
+			if len(cert.DNSNames) > 0 {
+				m.CertificateDNSNames = append([]string(nil), cert.DNSNames...)
 		if len(state.PeerCertificates) > 0 {
 			cert := state.PeerCertificates[0]
 			m.Integrity.CertificateCN = cert.Subject.CommonName
@@ -141,6 +188,7 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 		return nil, err
 	}
 	req.Host = domain
+	m.RequestHost = req.Host
 	resp, err := client.Do(req)
 	if err != nil {
 		m.Error = fmt.Sprintf("http: %v", err)
@@ -155,6 +203,23 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 	m.BytesRead = bytesRead
 	if duration > 0 {
 		m.Throughput = float64(bytesRead) * 8 / duration.Seconds()
+	}
+	m.HTTPFingerprint.StatusCode = resp.StatusCode
+	m.HTTPFingerprint.ContentLength = bytesRead
+	headers := map[string]string{}
+	headerKeys := []string{"Server", "CF-RAY", "CF-Cache-Status", "Content-Type"}
+	for _, key := range headerKeys {
+		if value := resp.Header.Get(key); value != "" {
+			headers[strings.ToLower(key)] = value
+		}
+	}
+	if len(headers) > 0 {
+		m.HTTPFingerprint.Headers = headers
+	}
+	if origin := resp.Header.Get("CF-Worker-Upstream"); origin != "" {
+		m.OriginHost = origin
+	} else if origin := resp.Header.Get("X-Backend-Host"); origin != "" {
+		m.OriginHost = origin
 	}
 	m.Integrity.ResponseHash = hex.EncodeToString(hasher.Sum(nil))
 	if resp.TLS != nil {
@@ -176,6 +241,13 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 	if colo := resp.Header.Get("CF-ORIGIN-COL"); colo != "" && m.CFColo == "" {
 		m.CFColo = strings.ToUpper(colo)
 	}
+	if m.SNI == "" {
+		m.SNI = p.TLSConfig.ServerName
+	}
+	if info, ok := geo.LookupColo(m.CFColo); ok {
+		m.Geo = info
+	}
+	m.Success = readErr == nil
 	m.Success = readErr == nil && resp.StatusCode < 500
 	if readErr != nil {
 		m.Error = fmt.Sprintf("read body: %v", readErr)
@@ -188,6 +260,58 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 		}
 	}
 	return m, nil
+}
+
+// ApplyValidation performs post-processing checks based on expected upstream data.
+func (m *Measurement) ApplyValidation(expectedOrigin string, trustedCNs []string) {
+	m.Validation.SNI = m.SNI
+	m.Validation.CertificateCN = m.CertificateCN
+	m.Validation.ExpectedOrigin = expectedOrigin
+	if len(trustedCNs) > 0 {
+		m.Validation.ExpectedCNs = append([]string(nil), trustedCNs...)
+	} else {
+		m.Validation.ExpectedCNs = nil
+	}
+	actualOrigin := strings.TrimSpace(m.OriginHost)
+	m.Validation.OriginHost = actualOrigin
+	var failures []string
+
+	matchCN := true
+	if len(trustedCNs) > 0 {
+		matchCN = false
+		for _, cn := range trustedCNs {
+			if strings.EqualFold(cn, m.CertificateCN) {
+				matchCN = true
+				break
+			}
+		}
+	} else if m.CertificateCN != "" && m.Domain != "" {
+		matchCN = strings.EqualFold(m.CertificateCN, m.Domain)
+	}
+	m.Validation.CertificateMatch = matchCN
+	if !matchCN {
+		failures = append(failures, "certificate_cn_mismatch")
+	}
+
+	if expectedOrigin != "" {
+		if actualOrigin == "" {
+			m.Validation.OriginMatch = false
+			failures = append(failures, "origin_host_missing")
+		} else {
+			matchOrigin := strings.EqualFold(expectedOrigin, actualOrigin)
+			m.Validation.OriginMatch = matchOrigin
+			if !matchOrigin {
+				failures = append(failures, "origin_host_mismatch")
+			}
+		}
+	} else {
+		m.Validation.OriginMatch = true
+	}
+	if len(failures) > 0 {
+		m.Validation.Failures = failures
+	} else {
+		m.Validation.Failures = nil
+	}
 }
 
 func (p *Prober) cloneTransportForIP(ip net.IP) *http.Transport {

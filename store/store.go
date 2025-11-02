@@ -14,10 +14,14 @@ import (
 
 // Record represents a scored measurement ready to be persisted.
 type Record struct {
-	Timestamp   time.Time          `json:"timestamp"`
-	Score       float64            `json:"score"`
-	Components  map[string]float64 `json:"components"`
-	Measurement prober.Measurement `json:"measurement"`
+	Timestamp      time.Time          `json:"timestamp"`
+	Source         string             `json:"source"`
+	Score          float64            `json:"score"`
+	Grade          string             `json:"grade"`
+	Status         string             `json:"status"`
+	FailureReasons []string           `json:"failure_reasons,omitempty"`
+	Components     map[string]float64 `json:"components"`
+	Measurement    prober.Measurement `json:"measurement"`
 }
 
 // Store persists and retrieves measurement records.

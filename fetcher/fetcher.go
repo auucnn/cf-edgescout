@@ -11,8 +11,22 @@ import (
 
 // RangeSet groups IPv4 and IPv6 networks for downstream consumers.
 type RangeSet struct {
-	IPv4 []*net.IPNet
-	IPv6 []*net.IPNet
+	IPv4    []*net.IPNet
+	IPv6    []*net.IPNet
+	Sources []SourceRangeSet
+}
+
+// SourceRangeSet groups networks that originate from the same upstream source.
+type SourceRangeSet struct {
+	Name           string
+	Priority       int
+	Concurrency    int
+	RateLimit      time.Duration
+	Domain         string
+	ExpectedOrigin string
+	TrustedCNs     []string
+	IPv4           []*net.IPNet
+	IPv6           []*net.IPNet
 }
 
 // Fetcher orchestrates fetching and aggregating networks from multiple providers.
@@ -73,6 +87,16 @@ func (f *Fetcher) Sources() []SourceConfig {
 	for _, cfg := range f.configs {
 		copies = append(copies, cfg.Clone())
 	}
+	official := SourceRangeSet{
+		Name:        "official",
+		Priority:    100,
+		Concurrency: 1,
+		RateLimit:   0,
+		Domain:      "",
+		IPv4:        ipv4,
+		IPv6:        ipv6,
+	}
+	return RangeSet{IPv4: ipv4, IPv6: ipv6, Sources: []SourceRangeSet{official}}, nil
 	return copies
 }
 
