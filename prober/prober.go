@@ -2,7 +2,9 @@ package prober
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,21 @@ import (
 )
 
 // Measurement captures the outcome of probing a single IP.
+type IntegrityReport struct {
+	TLSServerName   string   `json:"tlsServerName"`
+	CertificateCN   string   `json:"certificateCN"`
+	CertificateSANs []string `json:"certificateSANs"`
+	MatchesSNI      bool     `json:"matchesSni"`
+	HTTPStatus      int      `json:"httpStatus"`
+	ResponseHash    string   `json:"responseHash"`
+}
+
+type LocationInfo struct {
+	Colo    string `json:"colo"`
+	City    string `json:"city"`
+	Country string `json:"country"`
+}
+
 type Measurement struct {
 	IP                  net.IP
 	Domain              string
@@ -57,6 +74,28 @@ type ValidationResult struct {
 	ExpectedOrigin   string   `json:"expected_origin,omitempty"`
 	OriginMatch      bool     `json:"origin_match"`
 	Failures         []string `json:"failures,omitempty"`
+	IP           net.IP          `json:"ip"`
+	Domain       string          `json:"domain"`
+	TCPDuration  time.Duration   `json:"tcpDuration"`
+	TLSDuration  time.Duration   `json:"tlsDuration"`
+	HTTPDuration time.Duration   `json:"httpDuration"`
+	Success      bool            `json:"success"`
+	Error        string          `json:"error"`
+	ALPN         string          `json:"alpn"`
+	TLSVersion   string          `json:"tlsVersion"`
+	Throughput   float64         `json:"throughput"`
+	CFRay        string          `json:"cfRay"`
+	CFColo       string          `json:"cfColo"`
+	Timestamp    time.Time       `json:"timestamp"`
+	Source       string          `json:"source"`
+	SourceType   string          `json:"sourceType"`
+	SourceWeight float64         `json:"sourceWeight"`
+	Provider     string          `json:"provider"`
+	Network      string          `json:"network"`
+	Family       string          `json:"family"`
+	BytesRead    int64           `json:"bytesRead"`
+	Integrity    IntegrityReport `json:"integrity"`
+	Location     LocationInfo    `json:"location"`
 }
 
 // Prober executes network measurements against Cloudflare edge IPs.
@@ -100,6 +139,7 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 		return nil, errors.New("ip is nil")
 	}
 	m := &Measurement{IP: ip, Domain: domain, Timestamp: time.Now()}
+	m.Integrity.TLSServerName = domain
 	address := net.JoinHostPort(ip.String(), p.port())
 
 	tcpStart := time.Now()
@@ -126,6 +166,12 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 			m.CertificateCN = cert.Subject.CommonName
 			if len(cert.DNSNames) > 0 {
 				m.CertificateDNSNames = append([]string(nil), cert.DNSNames...)
+		if len(state.PeerCertificates) > 0 {
+			cert := state.PeerCertificates[0]
+			m.Integrity.CertificateCN = cert.Subject.CommonName
+			m.Integrity.CertificateSANs = append([]string{}, cert.DNSNames...)
+			if err := cert.VerifyHostname(domain); err == nil {
+				m.Integrity.MatchesSNI = true
 			}
 		}
 	}
@@ -148,10 +194,13 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 		m.Error = fmt.Sprintf("http: %v", err)
 		return m, nil
 	}
+	m.Integrity.HTTPStatus = resp.StatusCode
 	bodyStart := time.Now()
-	bytesRead, readErr := io.Copy(io.Discard, resp.Body)
+	hasher := sha256.New()
+	bytesRead, readErr := io.Copy(io.MultiWriter(io.Discard, hasher), resp.Body)
 	_ = resp.Body.Close()
 	duration := time.Since(bodyStart)
+	m.BytesRead = bytesRead
 	if duration > 0 {
 		m.Throughput = float64(bytesRead) * 8 / duration.Seconds()
 	}
@@ -172,6 +221,7 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 	} else if origin := resp.Header.Get("X-Backend-Host"); origin != "" {
 		m.OriginHost = origin
 	}
+	m.Integrity.ResponseHash = hex.EncodeToString(hasher.Sum(nil))
 	if resp.TLS != nil {
 		if m.ALPN == "" {
 			m.ALPN = resp.TLS.NegotiatedProtocol
@@ -198,8 +248,16 @@ func (p *Prober) Probe(ctx context.Context, ip net.IP, domain string) (*Measurem
 		m.Geo = info
 	}
 	m.Success = readErr == nil
+	m.Success = readErr == nil && resp.StatusCode < 500
 	if readErr != nil {
 		m.Error = fmt.Sprintf("read body: %v", readErr)
+	}
+	if m.CFColo != "" {
+		if info, ok := geo.LookupColo(m.CFColo); ok {
+			m.Location = LocationInfo{Colo: info.Code, City: info.City, Country: info.Country}
+		} else {
+			m.Location = LocationInfo{Colo: m.CFColo}
+		}
 	}
 	return m, nil
 }

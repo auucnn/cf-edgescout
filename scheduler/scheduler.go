@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/example/cf-edgescout/fetcher"
@@ -33,6 +34,13 @@ type Scheduler struct {
 type SourcePolicy struct {
 	Priority  int
 	RateLimit time.Duration
+	Sampler     *sampler.Sampler
+	Prober      ProbeRunner
+	Scorer      *scorer.Scorer
+	Store       store.Store
+	RateLimit   time.Duration
+	Retries     int
+	Parallelism int
 }
 
 // Result captures the stored record for convenience when returning from scans.
@@ -41,11 +49,11 @@ type Result struct {
 }
 
 // Scan performs a one-off scan returning the stored records.
-func (s *Scheduler) Scan(ctx context.Context, ranges fetcher.RangeSet, domain string, total int) ([]Result, error) {
+func (s *Scheduler) Scan(ctx context.Context, sources []fetcher.SourceRange, domain string, total int) ([]Result, error) {
 	if s.Sampler == nil || s.Prober == nil || s.Scorer == nil || s.Store == nil {
 		return nil, errors.New("scheduler is missing components")
 	}
-	candidates, err := s.Sampler.Sample(ranges, total)
+	candidates, err := s.Sampler.SampleSources(sources, total)
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +67,13 @@ func (s *Scheduler) Scan(ctx context.Context, ranges fetcher.RangeSet, domain st
 		}
 		return sourceStates[i].policy.Priority > sourceStates[j].policy.Priority
 	})
+	if s.Parallelism <= 1 {
+		return s.scanSequential(ctx, candidates, domain)
+	}
+	return s.scanParallel(ctx, candidates, domain)
+}
+
+func (s *Scheduler) scanSequential(ctx context.Context, candidates []sampler.Candidate, domain string) ([]Result, error) {
 	results := make([]Result, 0, len(candidates))
 	processed := 0
 	for processed < len(candidates) {
@@ -131,6 +146,19 @@ func (s *Scheduler) Scan(ctx context.Context, ranges fetcher.RangeSet, domain st
 				return nil, ctx.Err()
 			case <-timer.C:
 			}
+		measurement.Source = candidate.Source
+		measurement.Provider = candidate.Provider
+		measurement.SourceType = string(candidate.ProviderKind)
+		if candidate.Network != nil {
+			measurement.Network = candidate.Network.String()
+		}
+		measurement.Family = candidate.Family
+		measurement.SourceWeight = candidate.Weight
+		lastProbe = time.Now()
+		score := s.Scorer.Score(*measurement)
+		record := store.Record{Timestamp: measurement.Timestamp, Score: score.Score, Components: score.Components, Measurement: score.Measurement}
+		if err := s.Store.Save(ctx, record); err != nil {
+			return nil, err
 		}
 	}
 	return results, nil
@@ -175,6 +203,78 @@ func buildSourceStates(candidates []sampler.Candidate, ranges fetcher.RangeSet, 
 }
 
 func (s *Scheduler) tryProbe(ctx context.Context, candidate sampler.Candidate, domain string) (*prober.Measurement, error) {
+func (s *Scheduler) scanParallel(ctx context.Context, candidates []sampler.Candidate, domain string) ([]Result, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	parallel := s.Parallelism
+	if parallel <= 1 {
+		parallel = 1
+	}
+	sem := make(chan struct{}, parallel)
+	type storedResult struct {
+		res Result
+		err error
+	}
+	resultCh := make(chan storedResult, len(candidates))
+	var wg sync.WaitGroup
+	var startCh <-chan time.Time
+	var ticker *time.Ticker
+	if s.RateLimit > 0 {
+		ticker = time.NewTicker(s.RateLimit)
+		startCh = ticker.C
+	}
+	for _, candidate := range candidates {
+		select {
+		case <-ctx.Done():
+			break
+		default:
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(candidate sampler.Candidate) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if startCh != nil {
+				select {
+				case <-ctx.Done():
+					resultCh <- storedResult{err: ctx.Err()}
+					return
+				case <-startCh:
+				}
+			}
+			measurement, err := s.tryProbe(ctx, candidate.IP, domain)
+			if err != nil {
+				resultCh <- storedResult{err: err}
+				return
+			}
+			score := s.Scorer.Score(*measurement)
+			record := store.Record{Timestamp: measurement.Timestamp, Score: score.Score, Components: score.Components, Measurement: score.Measurement}
+			if err := s.Store.Save(ctx, record); err != nil {
+				resultCh <- storedResult{err: err}
+				return
+			}
+			resultCh <- storedResult{res: Result{Record: record}}
+		}(candidate)
+	}
+	go func() {
+		wg.Wait()
+		if ticker != nil {
+			ticker.Stop()
+		}
+		close(resultCh)
+	}()
+	results := make([]Result, 0, len(candidates))
+	for res := range resultCh {
+		if res.err != nil {
+			cancel()
+			return nil, res.err
+		}
+		results = append(results, res.res)
+	}
+	return results, nil
+}
+
+func (s *Scheduler) tryProbe(ctx context.Context, ip net.IP, domain string) (*prober.Measurement, error) {
 	var measurement *prober.Measurement
 	var err error
 	attempts := s.Retries + 1
@@ -200,7 +300,7 @@ func (s *Scheduler) tryProbe(ctx context.Context, candidate sampler.Candidate, d
 }
 
 // RunDaemon continuously fetches ranges and scans at the provided interval.
-func (s *Scheduler) RunDaemon(ctx context.Context, fetch func(context.Context) (fetcher.RangeSet, error), domain string, total int, interval time.Duration) error {
+func (s *Scheduler) RunDaemon(ctx context.Context, fetch func(context.Context) ([]fetcher.SourceRange, error), domain string, total int, interval time.Duration) error {
 	if fetch == nil {
 		return errors.New("fetch function is nil")
 	}
