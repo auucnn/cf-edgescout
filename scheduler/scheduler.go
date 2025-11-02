@@ -35,11 +35,11 @@ type Result struct {
 }
 
 // Scan performs a one-off scan returning the stored records.
-func (s *Scheduler) Scan(ctx context.Context, ranges fetcher.RangeSet, domain string, total int) ([]Result, error) {
+func (s *Scheduler) Scan(ctx context.Context, sources []fetcher.SourceRange, domain string, total int) ([]Result, error) {
 	if s.Sampler == nil || s.Prober == nil || s.Scorer == nil || s.Store == nil {
 		return nil, errors.New("scheduler is missing components")
 	}
-	candidates, err := s.Sampler.Sample(ranges, total)
+	candidates, err := s.Sampler.SampleSources(sources, total)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +69,14 @@ func (s *Scheduler) scanSequential(ctx context.Context, candidates []sampler.Can
 		if err != nil {
 			return nil, err
 		}
+		measurement.Source = candidate.Source
+		measurement.Provider = candidate.Provider
+		measurement.SourceType = string(candidate.ProviderKind)
+		if candidate.Network != nil {
+			measurement.Network = candidate.Network.String()
+		}
+		measurement.Family = candidate.Family
+		measurement.SourceWeight = candidate.Weight
 		lastProbe = time.Now()
 		score := s.Scorer.Score(*measurement)
 		record := store.Record{Timestamp: measurement.Timestamp, Score: score.Score, Components: score.Components, Measurement: score.Measurement}
@@ -173,7 +181,7 @@ func (s *Scheduler) tryProbe(ctx context.Context, ip net.IP, domain string) (*pr
 }
 
 // RunDaemon continuously fetches ranges and scans at the provided interval.
-func (s *Scheduler) RunDaemon(ctx context.Context, fetch func(context.Context) (fetcher.RangeSet, error), domain string, total int, interval time.Duration) error {
+func (s *Scheduler) RunDaemon(ctx context.Context, fetch func(context.Context) ([]fetcher.SourceRange, error), domain string, total int, interval time.Duration) error {
 	if fetch == nil {
 		return errors.New("fetch function is nil")
 	}
