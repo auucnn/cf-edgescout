@@ -20,6 +20,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filtered := filterRecords(records, opts)
+	reverseRecords(filtered)
 	total := len(filtered)
 	start := opts.Offset
 	if start > total {

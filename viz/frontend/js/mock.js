@@ -69,7 +69,7 @@ function filterRecords(records, params) {
       }
       return true;
     })
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 }
 
 function filterBySource(records, source) {

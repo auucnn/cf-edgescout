@@ -40,7 +40,7 @@ func sampleRecords() []store.Record {
 func TestResultsHandlerSupportsFilteringAndPagination(t *testing.T) {
 	st := &mockStore{records: sampleRecords()}
 	srv := &Server{Store: st}
-	req := httptest.NewRequest(http.MethodGet, "/results?source=official&limit=1&offset=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/results?source=official&limit=2", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -57,14 +57,17 @@ func TestResultsHandlerSupportsFilteringAndPagination(t *testing.T) {
 	if payload.Total != 2 {
 		t.Fatalf("expected 2 official records got %d", payload.Total)
 	}
-	if len(payload.Results) != 1 {
-		t.Fatalf("expected 1 paginated record got %d", len(payload.Results))
+	if len(payload.Results) != 2 {
+		t.Fatalf("expected 2 results got %d", len(payload.Results))
 	}
-	if payload.Offset != 1 {
-		t.Fatalf("expected offset 1 got %d", payload.Offset)
+	if payload.Offset != 0 {
+		t.Fatalf("expected offset 0 got %d", payload.Offset)
 	}
 	if payload.Results[0].Score != 0.85 {
-		t.Fatalf("expected 0.85 got %.2f", payload.Results[0].Score)
+		t.Fatalf("expected most recent score 0.85 got %.2f", payload.Results[0].Score)
+	}
+	if payload.Results[0].Timestamp.Before(payload.Results[1].Timestamp) {
+		t.Fatalf("expected results sorted newest first")
 	}
 }
 
