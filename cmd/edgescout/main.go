@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/example/cf-edgescout/exporter"
@@ -57,6 +58,7 @@ func scanCmd(args []string) {
 	rate := fs.Duration("rate", 200*time.Millisecond, "Delay between probes")
 	jsonlPath := fs.String("jsonl", "", "Persist results to a JSONL file")
 	csvPath := fs.String("csv", "", "Export results to a CSV file")
+	providerList := fs.String("providers", "official,bestip,uouin", "Comma separated provider keys (use 'all' for every source)")
 	fs.Parse(args)
 
 	if *domain == "" {
@@ -65,10 +67,18 @@ func scanCmd(args []string) {
 	}
 
 	ctx := context.Background()
-	f := fetcher.New(nil)
-	ranges, err := f.Fetch(ctx)
+	providerKeys := parseProviderKeys(*providerList)
+	providers, err := fetcher.FilterProviders(fetcher.DefaultProviders(), providerKeys)
 	if err != nil {
-		log.Fatalf("fetch ranges: %v", err)
+		log.Fatalf("providers: %v", err)
+	}
+	f := fetcher.New(nil)
+	sources, fetchErr := f.FetchAll(ctx, providers)
+	if fetchErr != nil {
+		log.Printf("数据源告警: %v", fetchErr)
+	}
+	if len(sources) == 0 {
+		log.Fatal("未能获取任何可用数据源")
 	}
 
 	var st store.Store
@@ -86,7 +96,7 @@ func scanCmd(args []string) {
 		RateLimit: *rate,
 		Retries:   *retries,
 	}
-	results, err := sched.Scan(ctx, ranges, *domain, *count)
+	results, err := sched.Scan(ctx, sources, *domain, *count)
 	if err != nil {
 		log.Fatalf("scan: %v", err)
 	}
@@ -117,6 +127,7 @@ func daemonCmd(args []string) {
 	rate := fs.Duration("rate", 200*time.Millisecond, "Delay between probes")
 	interval := fs.Duration("interval", 5*time.Minute, "Interval between scans")
 	jsonlPath := fs.String("jsonl", "edges.jsonl", "Path to JSONL store")
+	providerList := fs.String("providers", "official,bestip,uouin", "Comma separated provider keys (use 'all' for every source)")
 	fs.Parse(args)
 
 	if *domain == "" {
@@ -134,9 +145,24 @@ func daemonCmd(args []string) {
 		RateLimit: *rate,
 		Retries:   *retries,
 	}
+	providerKeys := parseProviderKeys(*providerList)
+	providers, err := fetcher.FilterProviders(fetcher.DefaultProviders(), providerKeys)
+	if err != nil {
+		log.Fatalf("providers: %v", err)
+	}
 	rangeFetcher := fetcher.New(nil)
+	fetchFunc := func(ctx context.Context) ([]fetcher.SourceRange, error) {
+		sources, fetchErr := rangeFetcher.FetchAll(ctx, providers)
+		if fetchErr != nil {
+			log.Printf("数据源告警: %v", fetchErr)
+		}
+		if len(sources) == 0 {
+			return nil, fmt.Errorf("未能获取任何可用数据源")
+		}
+		return sources, nil
+	}
 	fmt.Printf("starting daemon with interval %s\n", interval.String())
-	if err := sched.RunDaemon(ctx, rangeFetcher.Fetch, *domain, *count, *interval); err != nil {
+	if err := sched.RunDaemon(ctx, fetchFunc, *domain, *count, *interval); err != nil {
 		log.Fatalf("daemon stopped: %v", err)
 	}
 }
@@ -153,4 +179,16 @@ func serveCmd(args []string) {
 	if err := http.ListenAndServe(*addr, server.Handler()); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+func parseProviderKeys(input string) []string {
+	parts := strings.Split(input, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

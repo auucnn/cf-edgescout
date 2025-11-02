@@ -2,6 +2,7 @@ package scorer
 
 import (
 	"math"
+	"strings"
 	"time"
 
 	"github.com/example/cf-edgescout/prober"
@@ -12,6 +13,8 @@ type Config struct {
 	LatencyWeight    float64
 	SuccessWeight    float64
 	ThroughputWeight float64
+	IntegrityWeight  float64
+	SourcePreference map[string]float64
 }
 
 // Result contains the final score and the intermediate metric contributions.
@@ -28,7 +31,13 @@ type Scorer struct {
 
 // New returns a Scorer with sensible default weights.
 func New() *Scorer {
-	return &Scorer{Config: Config{LatencyWeight: 0.4, SuccessWeight: 0.3, ThroughputWeight: 0.3}}
+	return &Scorer{Config: Config{
+		LatencyWeight:    0.35,
+		SuccessWeight:    0.25,
+		ThroughputWeight: 0.2,
+		IntegrityWeight:  0.2,
+		SourcePreference: map[string]float64{"official": 1.1, "cloudflare 官方发布": 1.05},
+	}}
 }
 
 // Score computes the final score for the measurement.
@@ -43,13 +52,47 @@ func (s *Scorer) Score(m prober.Measurement) Result {
 	components["success"] = successNorm
 	throughputNorm := normaliseThroughput(m.Throughput)
 	components["throughput"] = throughputNorm
+	integrityNorm := 0.0
+	if m.Integrity.MatchesSNI && m.Integrity.HTTPStatus >= 200 && m.Integrity.HTTPStatus < 400 {
+		integrityNorm = 1.0
+	} else if m.Integrity.HTTPStatus >= 200 && m.Integrity.HTTPStatus < 500 {
+		integrityNorm = 0.5
+	}
+	components["integrity"] = integrityNorm
 
-	totalWeight := s.Config.LatencyWeight + s.Config.SuccessWeight + s.Config.ThroughputWeight
+	totalWeight := s.Config.LatencyWeight + s.Config.SuccessWeight + s.Config.ThroughputWeight + s.Config.IntegrityWeight
 	if totalWeight == 0 {
 		totalWeight = 1
 	}
-	score := (latencyNorm*s.Config.LatencyWeight + successNorm*s.Config.SuccessWeight + throughputNorm*s.Config.ThroughputWeight) / totalWeight
+	score := (latencyNorm*s.Config.LatencyWeight + successNorm*s.Config.SuccessWeight + throughputNorm*s.Config.ThroughputWeight + integrityNorm*s.Config.IntegrityWeight) / totalWeight
+	sourceBoost := s.sourceBoost(m)
+	components["sourcePreference"] = sourceBoost
+	score *= sourceBoost
+	if m.SourceWeight > 0 {
+		components["sourceWeight"] = m.SourceWeight
+		score *= m.SourceWeight
+	}
+	if score > 1 {
+		score = 1
+	}
+	if score < 0 {
+		score = 0
+	}
 	return Result{Score: score, Components: components, Measurement: m}
+}
+
+func (s *Scorer) sourceBoost(m prober.Measurement) float64 {
+	boost := 1.0
+	candidates := []string{m.Source, m.Provider}
+	for _, key := range candidates {
+		if key == "" {
+			continue
+		}
+		if weight, ok := s.Config.SourcePreference[strings.ToLower(key)]; ok {
+			boost = weight
+		}
+	}
+	return boost
 }
 
 func normaliseLatency(d time.Duration) float64 {
