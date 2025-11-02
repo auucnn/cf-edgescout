@@ -1,0 +1,31 @@
+# Sample configuration for running the daemon scheduler
+mode: daemon
+interval: 5m
+max_history: 168
+jobs:
+  - name: healthcheck
+    targets:
+      - host: status.example.com
+        description: "Synthetic uptime check"
+        protocols: [https]
+        ports: [443]
+        paths:
+          - "/healthz"
+    probe:
+      timeout_ms: 1000
+      retries: 1
+      max_parallel: 8
+      respect_rate_limits: true
+    output:
+      directory: ./outputs/daemon
+      formats: [jsonl]
+notifications:
+  slack_webhook_env: SLACK_WEBHOOK_URL
+  email_recipients:
+    - ops@example.com
+  threshold:
+    latency_p95_ms: 500
+    success_rate: 0.995
+cloudflare:
+  account_id: CF_ACCOUNT_ID
+  api_token_env: CF_API_TOKEN
