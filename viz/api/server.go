@@ -54,7 +54,8 @@ func (s *Server) wrap(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		key := r.URL.Path + "?" + r.URL.RawQuery
+		origin := r.Header.Get("Origin")
+		key := origin + "|" + r.URL.Path + "?" + r.URL.RawQuery
 		if entry, ok := s.cache.get(key, s.now()); ok {
 			copyHeaders(w.Header(), entry.header)
 			w.WriteHeader(entry.status)
