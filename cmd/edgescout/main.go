@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/example/cf-edgescout/exporter"
@@ -145,12 +147,71 @@ func serveCmd(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	jsonlPath := fs.String("jsonl", "edges.jsonl", "JSONL store path")
 	addr := fs.String("addr", ":8080", "Address to listen on")
+	cacheTTL := fs.Duration("cache-ttl", 30*time.Second, "Cache refresh interval for API responses")
+	defaultSources := fs.String("default-sources", "", "Comma-separated default source filters applied to API queries")
+	defaultRegions := fs.String("default-regions", "", "Comma-separated default region filters applied to API queries")
+	defaultScoreMin := fs.String("default-score-min", "", "Default minimum score filter")
+	defaultScoreMax := fs.String("default-score-max", "", "Default maximum score filter")
+	corsOrigins := fs.String("cors-origins", "*", "Comma-separated list of allowed CORS origins")
 	fs.Parse(args)
 
 	st := store.NewJSONL(*jsonlPath)
-	server := &api.Server{Store: st}
+	filters := api.FilterOptions{}
+	if src := strings.TrimSpace(*defaultSources); src != "" {
+		filters.Sources = splitCSV(src)
+	}
+	if reg := strings.TrimSpace(*defaultRegions); reg != "" {
+		filters.Regions = splitCSV(reg)
+	}
+	if v := strings.TrimSpace(*defaultScoreMin); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			filters.MinScore = &f
+		} else {
+			log.Fatalf("parse default-score-min: %v", err)
+		}
+	}
+	if v := strings.TrimSpace(*defaultScoreMax); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			filters.MaxScore = &f
+		} else {
+			log.Fatalf("parse default-score-max: %v", err)
+		}
+	}
+	server := &api.Server{
+		Store:          st,
+		CacheTTL:       *cacheTTL,
+		DefaultFilters: filters,
+		AllowedOrigins: rawSplit(*corsOrigins),
+	}
 	fmt.Printf("serving results on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, server.Handler()); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+func splitCSV(input string) []string {
+	parts := strings.Split(input, ",")
+	var out []string
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, strings.ToLower(trimmed))
+		}
+	}
+	return out
+}
+
+func rawSplit(input string) []string {
+	parts := strings.Split(input, ",")
+	var out []string
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"*"}
+	}
+	return out
 }

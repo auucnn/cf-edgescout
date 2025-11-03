@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/example/cf-edgescout/fetcher"
@@ -62,7 +63,14 @@ func (s *Scheduler) Scan(ctx context.Context, ranges fetcher.RangeSet, domain st
 		}
 		lastProbe = time.Now()
 		score := s.Scorer.Score(*measurement)
-		record := store.Record{Timestamp: measurement.Timestamp, Score: score.Score, Components: score.Components, Measurement: score.Measurement}
+		record := store.Record{
+			Timestamp:   measurement.Timestamp,
+			Score:       score.Score,
+			Components:  score.Components,
+			Measurement: score.Measurement,
+			Source:      inferSource(score.Measurement),
+			Region:      inferRegion(score.Measurement),
+		}
 		if err := s.Store.Save(ctx, record); err != nil {
 			return nil, err
 		}
@@ -113,4 +121,33 @@ func (s *Scheduler) RunDaemon(ctx context.Context, fetch func(context.Context) (
 		case <-ticker.C:
 		}
 	}
+}
+
+func inferSource(m prober.Measurement) string {
+	if m.Domain != "" {
+		if strings.Contains(strings.ToLower(m.Domain), "cloudflare") {
+			return "official"
+		}
+		return "third-party"
+	}
+	if m.ALPN != "" {
+		return m.ALPN
+	}
+	if m.CFRay != "" {
+		return strings.ToLower(m.CFRay)
+	}
+	return "unknown"
+}
+
+func inferRegion(m prober.Measurement) string {
+	if m.CFColo != "" {
+		return strings.ToUpper(m.CFColo)
+	}
+	if m.CFRay != "" {
+		parts := strings.Split(m.CFRay, "-")
+		if len(parts) > 1 {
+			return strings.ToUpper(parts[len(parts)-1])
+		}
+	}
+	return ""
 }

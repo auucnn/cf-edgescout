@@ -18,6 +18,8 @@ type Record struct {
 	Score       float64            `json:"score"`
 	Components  map[string]float64 `json:"components"`
 	Measurement prober.Measurement `json:"measurement"`
+	Source      string             `json:"source,omitempty"`
+	Region      string             `json:"region,omitempty"`
 }
 
 // Store persists and retrieves measurement records.
