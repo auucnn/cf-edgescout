@@ -2,7 +2,6 @@ package sampler
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"math/big"
 	mathrand "math/rand"
@@ -19,16 +18,12 @@ type Candidate struct {
 	Network        *net.IPNet
 	Family         string
 	Source         string
+	Provider       string
+	ProviderKind   fetcher.SourceKind
+	Weight         float64
 	Domain         string
 	ExpectedOrigin string
 	TrustedCNs     []string
-	IP           net.IP
-	Network      *net.IPNet
-	Family       string
-	Source       string
-	Provider     string
-	ProviderKind fetcher.SourceKind
-	Weight       float64
 }
 
 // Sampler produces candidate IPs from Cloudflare network ranges.
@@ -59,21 +54,17 @@ func (s *Sampler) Remember(ip net.IP) {
 	s.history[ip.String()] = struct{}{}
 }
 
-// Sample selects up to total candidates using stratified sampling across provided networks.
+// Sample selects up to total candidates using the aggregated range set.
 func (s *Sampler) Sample(rs fetcher.RangeSet, total int) ([]Candidate, error) {
 	provider := fetcher.ProviderSpec{Name: "official", DisplayName: "Cloudflare 官方发布", Kind: fetcher.SourceKindOfficial, Weight: 1}
 	return s.SampleSources([]fetcher.SourceRange{{Provider: provider, RangeSet: rs}}, total)
 }
 
+// SampleSources selects candidates across multiple provider range sets.
 func (s *Sampler) SampleSources(sources []fetcher.SourceRange, total int) ([]Candidate, error) {
 	if total <= 0 {
 		return nil, errors.New("total must be > 0")
 	}
-	if len(rs.Sources) > 0 {
-		return s.sampleWithSources(rs, total)
-	}
-	networks := append([]*net.IPNet{}, rs.IPv4...)
-	networks = append(networks, rs.IPv6...)
 	if len(sources) == 0 {
 		return nil, errors.New("no sources available")
 	}
@@ -86,6 +77,9 @@ func (s *Sampler) SampleSources(sources []fetcher.SourceRange, total int) ([]Can
 		}
 		weights[i] = weight
 		weightSum += weight
+	}
+	if weightSum == 0 {
+		weightSum = 1
 	}
 	results := make([]Candidate, 0, total)
 	remaining := total
@@ -107,6 +101,9 @@ func (s *Sampler) SampleSources(sources []fetcher.SourceRange, total int) ([]Can
 		results = append(results, sampled...)
 		remaining = total - len(results)
 	}
+	if len(results) == 0 {
+		return nil, errors.New("no candidates produced")
+	}
 	return results, nil
 }
 
@@ -114,13 +111,16 @@ func (s *Sampler) sampleRange(source fetcher.SourceRange, total int) ([]Candidat
 	networks := append([]*net.IPNet{}, source.RangeSet.IPv4...)
 	networks = append(networks, source.RangeSet.IPv6...)
 	if len(networks) == 0 {
-		return nil, fmt.Errorf("数据源 %s 缺少可用网段", source.Provider.Name)
+		return nil, errors.New("数据源缺少可用网段")
 	}
 	weights := make([]float64, len(networks))
 	var weightSum float64
 	for i, n := range networks {
 		weights[i] = weightForNetwork(n)
 		weightSum += weights[i]
+	}
+	if weightSum == 0 {
+		weightSum = 1
 	}
 	candidates := make([]Candidate, 0, total)
 	for i, network := range networks {
@@ -131,12 +131,12 @@ func (s *Sampler) sampleRange(source fetcher.SourceRange, total int) ([]Candidat
 		if portion <= 0 {
 			portion = 1
 		}
-		for j := 0; j < portion && len(candidates) < total; j++ {
+		for portion > 0 && len(candidates) < total {
 			ip, ok := s.pickUniqueIP(network)
 			if !ok {
-				continue
+				break
 			}
-			candidates = append(candidates, Candidate{
+			candidate := Candidate{
 				IP:           ip,
 				Network:      network,
 				Family:       familyOf(network),
@@ -144,69 +144,15 @@ func (s *Sampler) sampleRange(source fetcher.SourceRange, total int) ([]Candidat
 				Provider:     source.Provider.DisplayName,
 				ProviderKind: source.Provider.Kind,
 				Weight:       source.Provider.Weight,
-			})
-		}
-	}
-	return candidates, nil
-}
-
-func (s *Sampler) sampleWithSources(rs fetcher.RangeSet, total int) ([]Candidate, error) {
-	type sourceNetwork struct {
-		network *net.IPNet
-		source  fetcher.SourceRangeSet
-	}
-	var combined []sourceNetwork
-	for _, src := range rs.Sources {
-		for _, n := range src.IPv4 {
-			combined = append(combined, sourceNetwork{network: n, source: src})
-		}
-		for _, n := range src.IPv6 {
-			combined = append(combined, sourceNetwork{network: n, source: src})
-		}
-	}
-	if len(combined) == 0 {
-		return nil, errors.New("no networks available")
-	}
-	weights := make([]float64, len(combined))
-	var weightSum float64
-	for i, entry := range combined {
-		weights[i] = weightForNetwork(entry.network)
-		weightSum += weights[i]
-	}
-	if weightSum == 0 {
-		weightSum = 1
-	}
-	results := make([]Candidate, 0, total)
-	for i, entry := range combined {
-		if len(results) >= total {
-			break
-		}
-		portion := int(math.Round(float64(total) * weights[i] / weightSum))
-		if portion == 0 {
-			portion = 1
-		}
-		for portion > 0 && len(results) < total {
-			ip, ok := s.pickUniqueIP(entry.network)
-			if !ok {
-				break
 			}
-			candidate := Candidate{
-				IP:             ip,
-				Network:        entry.network,
-				Family:         familyOf(entry.network),
-				Source:         entry.source.Name,
-				Domain:         entry.source.Domain,
-				ExpectedOrigin: entry.source.ExpectedOrigin,
-				TrustedCNs:     append([]string(nil), entry.source.TrustedCNs...),
-			}
-			results = append(results, candidate)
+			candidates = append(candidates, candidate)
 			portion--
 		}
 	}
-	if len(results) == 0 {
-		return nil, errors.New("no networks available")
+	if len(candidates) == 0 {
+		return nil, errors.New("no networks yielded candidates")
 	}
-	return results, nil
+	return candidates, nil
 }
 
 func (s *Sampler) pickUniqueIP(network *net.IPNet) (net.IP, bool) {
@@ -240,14 +186,11 @@ func weightForNetwork(network *net.IPNet) float64 {
 }
 
 func familyOf(network *net.IPNet) string {
-	ones, bits := network.Mask.Size()
-	if bits == 32 || network.IP.To4() != nil || ones <= 32 {
-		if network.IP.To4() != nil {
-			return "ipv4"
-		}
-		if bits == 32 {
-			return "ipv4"
-		}
+	if network == nil {
+		return ""
+	}
+	if network.IP.To4() != nil {
+		return "ipv4"
 	}
 	return "ipv6"
 }

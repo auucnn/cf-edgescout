@@ -22,19 +22,43 @@ type AggregatedSet struct {
 	Entries []RangeEntry `json:"entries"`
 }
 
-// RangeSet extracts the IPv4 and IPv6 slices from the aggregated entries.
+// RangeSet extracts the IPv4/IPv6 slices from the aggregated entries and groups
+// them per upstream source so the sampler can apply policies later.
 func (a AggregatedSet) RangeSet() RangeSet {
-	var rs RangeSet
+	rs := RangeSet{}
+	perSource := map[string]*SourceRangeSet{}
 	for _, entry := range a.Entries {
 		if entry.Network == nil {
 			continue
 		}
-		if entry.Network.IP.To4() != nil {
-			rs.IPv4 = append(rs.IPv4, cloneIPNet(entry.Network))
+		cloned := cloneIPNet(entry.Network)
+		if cloned.IP.To4() != nil {
+			rs.IPv4 = append(rs.IPv4, cloned)
 		} else {
-			rs.IPv6 = append(rs.IPv6, cloneIPNet(entry.Network))
+			rs.IPv6 = append(rs.IPv6, cloned)
+		}
+		for _, meta := range entry.Metadata {
+			if meta.Source == "" {
+				continue
+			}
+			sr, ok := perSource[meta.Source]
+			if !ok {
+				sr = &SourceRangeSet{Name: meta.Source, Credibility: meta.Credibility}
+				perSource[meta.Source] = sr
+			}
+			if cloned.IP.To4() != nil {
+				sr.IPv4 = append(sr.IPv4, cloneIPNet(cloned))
+			} else {
+				sr.IPv6 = append(sr.IPv6, cloneIPNet(cloned))
+			}
 		}
 	}
+	for _, sr := range perSource {
+		rs.Sources = append(rs.Sources, *sr)
+	}
+	sort.Slice(rs.Sources, func(i, j int) bool {
+		return rs.Sources[i].Name < rs.Sources[j].Name
+	})
 	return rs
 }
 
@@ -73,10 +97,14 @@ func (a *Aggregator) Result() AggregatedSet {
 	defer a.mu.Unlock()
 	entries := make([]RangeEntry, 0, len(a.entries))
 	for _, entry := range a.entries {
-		sort.Slice(entry.Metadata, func(i, j int) bool {
-			return entry.Metadata[i].Source < entry.Metadata[j].Source
+		meta := append([]RangeMetadata(nil), entry.Metadata...)
+		sort.Slice(meta, func(i, j int) bool {
+			if meta[i].Source == meta[j].Source {
+				return meta[i].Endpoint < meta[j].Endpoint
+			}
+			return meta[i].Source < meta[j].Source
 		})
-		entries = append(entries, RangeEntry{Network: cloneIPNet(entry.Network), Metadata: append([]RangeMetadata{}, entry.Metadata...)})
+		entries = append(entries, RangeEntry{Network: cloneIPNet(entry.Network), Metadata: meta})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Network.String() < entries[j].Network.String()

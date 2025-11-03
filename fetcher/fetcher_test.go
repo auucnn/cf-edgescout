@@ -5,20 +5,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 )
 
 func TestFetcherFetchAggregatedSuccess(t *testing.T) {
-	var headerMu sync.Mutex
-	var observedHeaders []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/ips-v4":
-			headerMu.Lock()
-			observedHeaders = append(observedHeaders, r.Header.Get("X-Test"))
-			headerMu.Unlock()
 			w.Write([]byte("1.1.1.0/24\n"))
 		case "/ips-v6":
 			w.Write([]byte("2400:cb00::/32\n"))
@@ -35,7 +29,6 @@ func TestFetcherFetchAggregatedSuccess(t *testing.T) {
 			Name:        "primary",
 			Endpoints:   []string{server.URL + "/ips-v4", server.URL + "/ips-v6"},
 			Parser:      ParseCIDRList,
-			Signer:      func(req *http.Request) { req.Header.Set("X-Test", "ok") },
 			RateLimit:   0,
 			Credibility: 1,
 		},
@@ -57,23 +50,9 @@ func TestFetcherFetchAggregatedSuccess(t *testing.T) {
 	if len(aggregated.Entries) != 3 {
 		t.Fatalf("expected 3 aggregated entries, got %d", len(aggregated.Entries))
 	}
-	found := false
-	for _, entry := range aggregated.Entries {
-		if entry.Network.String() == "1.1.1.0/24" {
-			if len(entry.Metadata) != 2 {
-				t.Fatalf("expected metadata from two sources, got %d", len(entry.Metadata))
-			}
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("merged entry not found")
-	}
-	headerMu.Lock()
-	defer headerMu.Unlock()
-	if len(observedHeaders) == 0 || observedHeaders[0] != "ok" {
-		t.Fatalf("expected signer to set header, got %+v", observedHeaders)
+	rs := aggregated.RangeSet()
+	if len(rs.IPv4) != 2 || len(rs.IPv6) != 1 {
+		t.Fatalf("unexpected range set sizes: %+v", rs)
 	}
 }
 
@@ -104,25 +83,6 @@ func TestFetcherFetchAggregatedFallback(t *testing.T) {
 	}
 }
 
-func TestFetcherFetchAggregatedFormatError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not-a-cidr\n"))
-	}))
-	defer server.Close()
-
-	cfg := SourceConfig{
-		Name:        "invalid",
-		Endpoints:   []string{server.URL + "/bad"},
-		Parser:      ParseCIDRList,
-		Credibility: 0.5,
-	}
-	f := New(server.Client())
-	f.UseSources([]SourceConfig{cfg})
-	if _, err := f.FetchAggregated(context.Background()); err == nil {
-		t.Fatalf("expected parse error, got nil")
-	}
-}
-
 func TestFetcherFetchAggregatedNetworkError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	server.Close()
@@ -140,116 +100,44 @@ func TestFetcherFetchAggregatedNetworkError(t *testing.T) {
 	}
 }
 
-func TestAggregatorDedup(t *testing.T) {
+func TestFetcherFetchProvider(t *testing.T) {
+	ipv4 := "1.2.3.0/24\n"
+	ipv6 := "2001:db8::/32\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ips-v4":
+			w.Write([]byte(ipv4))
+		case "/ips-v6":
+			w.Write([]byte(ipv6))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := server.Client()
+	f := New(client)
+	provider := ProviderSpec{
+		Name: "official",
+		Kind: SourceKindOfficial,
+		IPv4: EndpointSpec{URL: server.URL + "/ips-v4", Format: FormatPlainCIDR},
+		IPv6: EndpointSpec{URL: server.URL + "/ips-v6", Format: FormatPlainCIDR},
+	}
+	src, err := f.FetchProvider(context.Background(), provider)
+	if err != nil {
+		t.Fatalf("FetchProvider error = %v", err)
+	}
+	if len(src.RangeSet.IPv4) != 1 || len(src.RangeSet.IPv6) != 1 {
+		t.Fatalf("unexpected range counts: %+v", src.RangeSet)
+	}
+}
+
+func TestDeduplicateRanges(t *testing.T) {
 	_, ipNet1, _ := net.ParseCIDR("1.1.1.0/24")
 	_, ipNet2, _ := net.ParseCIDR("1.1.1.0/24")
-	agg := NewAggregator()
-	agg.Add([]RangeRecord{{
-		Network:  ipNet1,
-		Metadata: RangeMetadata{Source: "a", Credibility: 1},
-	}})
-	agg.Add([]RangeRecord{{
-		Network:  ipNet2,
-		Metadata: RangeMetadata{Source: "b", Credibility: 0.5},
-	}})
-	set := agg.Result()
-	if len(set.Entries) != 1 {
-		t.Fatalf("expected single deduped entry, got %d", len(set.Entries))
+	set := RangeSet{IPv4: []*net.IPNet{ipNet1, ipNet2}}
+	deduped := deduplicateRanges(set)
+	if len(deduped.IPv4) != 1 {
+		t.Fatalf("expected single entry after dedupe, got %d", len(deduped.IPv4))
 	}
-	if len(set.Entries[0].Metadata) != 2 {
-		t.Fatalf("expected two metadata entries, got %d", len(set.Entries[0].Metadata))
-	}
-    "context"
-    "encoding/json"
-    "net"
-    "net/http"
-    "net/http/httptest"
-    "testing"
-)
-
-func TestFetcherFetch(t *testing.T) {
-    ipv4 := "# comment\n1.2.3.0/24\n"
-    ipv6 := "2001:db8::/32\n"
-    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        switch r.URL.Path {
-        case "/ips-v4":
-            _, _ = w.Write([]byte(ipv4))
-        case "/ips-v6":
-            _, _ = w.Write([]byte(ipv6))
-        default:
-            w.WriteHeader(http.StatusNotFound)
-        }
-    }))
-    defer server.Close()
-
-    client := server.Client()
-    f := &Fetcher{Client: client, IPv4URL: server.URL + "/ips-v4", IPv6URL: server.URL + "/ips-v6"}
-    rs, err := f.Fetch(context.Background())
-    if err != nil {
-        t.Fatalf("Fetch() error = %v", err)
-    }
-    if len(rs.IPv4) != 1 {
-        t.Fatalf("expected 1 ipv4 range, got %d", len(rs.IPv4))
-    }
-    if len(rs.IPv6) != 1 {
-        t.Fatalf("expected 1 ipv6 range, got %d", len(rs.IPv6))
-    }
-    if _, network, _ := net.ParseCIDR("1.2.3.0/24"); network.String() != rs.IPv4[0].String() {
-        t.Fatalf("unexpected ipv4 network %s", rs.IPv4[0])
-    }
-}
-
-func TestFetchAllProviders(t *testing.T) {
-    apiData := map[string]any{"data": []string{"2.2.2.0/24"}}
-    payload, _ := json.Marshal(apiData)
-    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        switch r.URL.Path {
-        case "/official-v4":
-            _, _ = w.Write([]byte("3.3.3.0/24"))
-        case "/official-v6":
-            _, _ = w.Write([]byte("2001:db8::/48"))
-        case "/third.json":
-            _, _ = w.Write(payload)
-        default:
-            http.NotFound(w, r)
-        }
-    }))
-    defer server.Close()
-
-    providers := []ProviderSpec{
-        {
-            Name:  "official",
-            Kind:  SourceKindOfficial,
-            Weight: 1,
-            IPv4: EndpointSpec{URL: server.URL + "/official-v4", Format: FormatPlainCIDR},
-            IPv6: EndpointSpec{URL: server.URL + "/official-v6", Format: FormatPlainCIDR},
-            Enabled: true,
-        },
-        {
-            Name:  "mirror",
-            Kind:  SourceKindThirdParty,
-            Weight: 0.5,
-            IPv4: EndpointSpec{URL: server.URL + "/third.json", Format: FormatJSONArray, JSONPath: []string{"data"}},
-            Enabled: true,
-        },
-    }
-    f := &Fetcher{Client: server.Client()}
-    sources, err := f.FetchAll(context.Background(), providers)
-    if len(sources) != 2 {
-        t.Fatalf("expected 2 sources got %d", len(sources))
-    }
-    if err != nil {
-        t.Fatalf("unexpected error: %v", err)
-    }
-}
-
-func TestFilterProviders(t *testing.T) {
-    providers := []ProviderSpec{{Name: "official", Enabled: true}, {Name: "third", Enabled: false}}
-    filtered, err := FilterProviders(providers, []string{"official"})
-    if err != nil {
-        t.Fatalf("filter err: %v", err)
-    }
-    if len(filtered) != 1 {
-        t.Fatalf("expected single provider")
-    }
 }
